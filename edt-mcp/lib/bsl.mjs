@@ -232,16 +232,39 @@ export async function waitForPort(port, { timeoutMs = 180_000, intervalMs = 500 
  * @returns {{url: string, root: string, stop: () => Promise<void>}}
  */
 export async function startBslSupervisor({ jar, java = 'java', root, port, log = () => {}, timeoutMs = 180_000 }) {
+  // Каталог корня должен существовать: иначе spawn падает с ENOENT, и вместо
+  // понятной ошибки получается долгое ожидание порта.
+  if (!existsSync(root)) throw new Error(`каталог рабочего пространства не найден: ${root}`);
+
   const actualPort = port === undefined ? await freePort() : Number(port);
   log(`запускаю BSL LS: ${java} -jar ${basename(jar)} lsp --mcp --server.port=${actualPort} (root ${root})`);
 
-  const child = spawn(java, ['-jar', jar, 'lsp', '--mcp', `--server.port=${actualPort}`], {
-    cwd: root,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const child = (() => {
+    try {
+      return spawn(java, ['-jar', jar, 'lsp', '--mcp', `--server.port=${actualPort}`], {
+        cwd: root,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      // Windows может бросить синхронно (нет прав на создание процесса).
+      throw new Error(`BSL LS не удалось запустить (${java}): ${error.message}`);
+    }
+  })();
 
-  child.on('error', (error) => log(`BSL LS не запустился: ${error.message}`));
-  child.on('exit', (code, signal) => log(`BSL LS завершился: ${signal ?? code}`));
+  // Ошибка запуска и ранний выход должны прерывать ожидание, а не висеть в нём.
+  let startupFailure = null;
+  const failed = new Promise((_, reject) => {
+    child.once('error', (error) => {
+      startupFailure = error.code === 'ENOENT' ? `команда ${java} не найдена` : error.message;
+      reject(new Error(`BSL LS не запустился: ${startupFailure}`));
+    });
+    child.once('exit', (code, signal) => {
+      startupFailure = `процесс завершился (${signal ?? code})`;
+      reject(new Error(`BSL LS завершился при запуске: ${signal ?? code}`));
+    });
+  });
+  failed.catch(() => {});
+
   child.stderr.on('data', (chunk) => {
     const text = String(chunk);
     if (/ERROR|Exception|WARN.*roots/i.test(text)) log(text.trim().slice(0, 400));
@@ -264,7 +287,7 @@ export async function startBslSupervisor({ jar, java = 'java', root, port, log =
   child.stdin.write(lspFrame({ jsonrpc: '2.0', method: 'initialized', params: {} }));
 
   try {
-    await waitForPort(actualPort, { timeoutMs });
+    await Promise.race([waitForPort(actualPort, { timeoutMs }), failed]);
   } catch (error) {
     child.kill();
     throw error;

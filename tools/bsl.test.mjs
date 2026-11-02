@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { bslAvailable, bslSettings, ensureJar, resolveBsl, selectExecAsset } from '../edt-mcp/lib/bsl.mjs';
+import { bslAvailable, bslSettings, ensureJar, resolveBsl, selectExecAsset, startBslSupervisor } from '../edt-mcp/lib/bsl.mjs';
 
 // Временные каталоги держим внутри рабочего каталога: системный TMP в
 // ограниченном режиме может быть недоступен, а .smoke/ уже в .gitignore.
@@ -129,4 +129,26 @@ test('bslAvailable: без пути и без скачивания сервер 
   assert.equal(bslAvailable({ downloadAllowed: false }), false);
   assert.equal(bslAvailable({ downloadAllowed: false, jar: '/a.jar' }), true);
   assert.equal(bslAvailable({ downloadAllowed: false, mcpUrl: 'http://x/mcp' }), true);
+});
+
+test('startBslSupervisor: несуществующий корень — ошибка сразу, без ожидания порта', async () => {
+  const dir = tempDir();
+  const jar = join(dir, 'a.jar');
+  writeFileSync(jar, 'jar');
+  const started = Date.now();
+  await assert.rejects(
+    startBslSupervisor({ jar, root: join(dir, 'no-such-dir'), timeoutMs: 60_000 }),
+    /каталог рабочего пространства не найден/,
+  );
+  assert.ok(Date.now() - started < 5000, 'должно падать без ожидания порта');
+});
+
+test('startBslSupervisor: отсутствующая java-команда — ошибка запуска, а не таймаут', async () => {
+  const dir = tempDir();
+  const jar = join(dir, 'a.jar');
+  writeFileSync(jar, 'jar');
+  await assert.rejects(
+    startBslSupervisor({ jar, java: join(dir, 'no-such-java'), root: dir, timeoutMs: 60_000 }),
+    /не запустился|не удалось запустить|завершился при запуске/,
+  );
 });
