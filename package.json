@@ -15,6 +15,7 @@
     "validate": "node tools/validate-bundle.mjs",
     "validate:tag": "node tools/validate-bundle.mjs --tag",
     "check:edt": "node tools/check-edt-mcp.mjs",
+    "smoke": "node tools/smoke-bundle.mjs",
     "pack:check": "npm pack --workspace edt-mcp --dry-run --cache .npm-cache"
   },
   "devDependencies": {

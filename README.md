@@ -23,9 +23,12 @@ edt-mcp/
 tools/
   check-edt-mcp.mjs      проверка сервера без установки бандла
   validate-bundle.mjs    проверка манифеста, патча, локалей и иконки (CI)
+  stub-mcp-server.mjs    заглушка MCP-сервера для smoke
+  smoke-bundle.mjs       прогон бандла в одноразовом профиле DSH
 .github/workflows/
   ci.yml                 валидация на push и pull request
   release.yml            tarball бандла в GitHub Release по тегу v*
+  smoke.yml              полный smoke бандла с настоящим DSH
 package.json             рабочее пространство: скрипты и dev-зависимости
 ```
 
@@ -125,12 +128,22 @@ npm install          # yaml + @modelcontextprotocol/client для проверо
 npm run validate     # манифест, YAML-патч, паритет локалей en/ru, иконка
 npm run pack:check   # что попадёт в tarball бандла
 npm run check:edt    # живая проверка MCP-сервера EDT
+npm run smoke        # полный прогон бандла в одноразовом профиле DSH
 ```
 
 `validate-bundle.mjs` падает, если из `files` или `exports` манифеста пропал файл,
 если в `cordis.patch.yml` нет `serverName`/`url` для http-транспорта, если локали
 разошлись по ключам или если у иконки нет `viewBox`. В CI эти же проверки гоняются
 на Ubuntu, дополнительно проверяется состав tarball и синтаксис скриптов.
+
+`smoke-bundle.mjs` поднимает одноразовый `DSH_HOME` в `.smoke/`, ставит бандл из
+`dist/*.tgz` через `dsh plugin add`, проверяет, что строка плагина и её настройки
+попали в композицию профиля, затем поднимает заглушку MCP на порту из патча и
+ждёт от неё `initialize` и `tools/list` от настоящего `dsh-mcp-client`. Нужен
+установленный DSH: `npm i --no-save @deepseek-ai/dsh@0.2.1-rc.5` (или `DSH_BIN`).
+Если порт из патча занят (например, живым сервером EDT), задайте `SMOKE_PORT`.
+Smoke гоняется отдельным workflow по расписанию, вручную и на PR, которые
+трогают бандл — версия DSH закреплена в `env.DSH_VERSION`.
 
 Релиз: поднять `version` в `edt-mcp/package.json`, добавить запись в `CHANGELOG.md`,
 поставить тег `vX.Y.Z` и запушить его — `release.yml` сверит тег с версией и

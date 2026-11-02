@@ -1,0 +1,52 @@
+name: Smoke
+
+# Полная проверка бандла: одноразовый профиль DSH, установка из tarball,
+# композиция профиля и живая MCP-сессия с заглушкой вместо сервера EDT.
+# Долго (установка DSH) и зависит от версии DSH, поэтому — по расписанию,
+# вручную и на PR, которые трогают сам бандл.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+  pull_request:
+    paths:
+      - 'edt-mcp/**'
+      - 'tools/**'
+      - '.github/workflows/smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Версия DSH, с которой проверяется бандл. Поднимать вместе с обновлением DSH.
+      DSH_VERSION: 0.2.1-rc.5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Зависимости репозитория
+        run: npm ci
+
+      - name: pnpm для менеджера плагинов
+        run: |
+          npm i -g pnpm@10
+          pnpm -v
+
+      - name: DSH для smoke-прогона
+        run: npm i --no-save --no-package-lock "@deepseek-ai/dsh@$DSH_VERSION"
+
+      - name: Сборка tarball бандла
+        run: |
+          mkdir -p dist
+          npm pack --workspace edt-mcp --pack-destination dist
+
+      - name: Smoke
+        run: npm run smoke

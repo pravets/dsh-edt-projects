@@ -5,6 +5,17 @@
 
 ## [Unreleased]
 
+### Добавлено
+
+- `tools/stub-mcp-server.mjs` — минимальный MCP-сервер (Streamable HTTP, JSON-RPC
+  без SSE) с инструментом `ping`, который отвечает `pong`.
+- `tools/smoke-bundle.mjs` — полный прогон бандла: одноразовый `DSH_HOME`,
+  установка из `dist/*.tgz` через `dsh plugin add`, проверка композиции профиля,
+  живая MCP-сессия с заглушкой (`initialize`, `tools/list`).
+- Workflow `smoke.yml` — запуск smoke по расписанию, вручную и на PR, которые
+  трогают бандл.
+- Скрипт `npm run smoke`.
+
 ## [1.0.0] - 2026-11-02
 
 ### Добавлено
