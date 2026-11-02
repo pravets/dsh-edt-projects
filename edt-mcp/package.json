@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-edt-mcp",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "description": "MCP hub for 1C development: EDT always on, BSL Language Server started in LSP+MCP mode with workspace roots, task tracker via mcp_pin, with model-facing usage rules",

@@ -52,6 +52,24 @@ test('без edt правила правок нет', () => {
   assert.doesNotMatch(text, /EDT-MCP\/issues/);
 });
 
+test('вики: блок появляется с путями и входной точкой', () => {
+  const text = buildRulesText({}, [server('edt')], [{ path: 'C:\\git\\dev-llm-wiki', entry: 'C:\\git\\dev-llm-wiki\\wiki\\index.md' }]);
+  assert.match(text, /### Вики проекта/);
+  assert.match(text, /C:\\git\\dev-llm-wiki/);
+  assert.match(text, /wiki\\index\.md/);
+  assert.match(text, /только для чтения/);
+});
+
+test('вики: без корней блока нет', () => {
+  const text = buildRulesText({}, [server('edt')], []);
+  assert.doesNotMatch(text, /### Вики проекта/);
+});
+
+test('вики: без входной точки подсказка ведёт к AGENTS.md', () => {
+  const text = buildRulesText({}, [server('edt')], [{ path: 'C:\\wiki' }]);
+  assert.match(text, /AGENTS\.md/);
+});
+
 test('правило правок действует и при недоступном edt: оно про конфигурацию, а не про связь', () => {
   const text = buildRulesText({ EDT_MCP_URL: 'http://127.0.0.1:8767/mcp' }, []);
   assert.match(text, /Правки конфигурации — только через EDT/);
