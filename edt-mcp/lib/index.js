@@ -33,6 +33,7 @@ const PIN_RULES = `
 Часть серверов не подключена заранее, чтобы не занимать контекст их схемами. Посмотреть состояние — \`mcp_servers\`; подключить — \`mcp_pin(server)\`, отключить — \`mcp_unpin(server)\`.
 
 - Подключай сервер сам, когда задача без него не решается: нужна диагностика или типы — \`bsl\`, нужны задачи или статусы — \`tasks\`.
+- Для \`bsl\` передавай корень: \`mcp_pin("bsl", root: "<каталог конфигурации>")\`. Без корня сервер видит только каталог запуска DSH.
 - Первый \`mcp_pin("bsl")\` может занять время: при отсутствии готового jar сервер скачивается (~130 МБ). Предупреди пользователя, если это долго.
 - После \`mcp_unpin\` инструменты сервера исчезают из запроса. Не отключай сервер, пока работа с ним не закончена.
 - Если сервер помечен как не настроенный, не пытайся его подключить: скажи пользователю, чего не хватает.`;
@@ -50,7 +51,8 @@ const BSL_RULES = `
 - \`analyze_file\` — диагностики одного файла. Это самый быстрый способ проверить свежую правку.
 - \`type_info\` и \`global_member_info\` — свойства, методы и сигнатуры типов и глобального контекста платформы. Сверяйся с ними, а не по памяти.
 - \`definition\`, \`find_references\`, \`call_hierarchy\`, \`hover\`, \`type_at_position\`, \`document_symbols\` — навигация. Перед изменением метода посмотри \`call_hierarchy\` или \`find_references\`.
-- Позиции в \`line\`/\`character\` нумеруются с нуля.`;
+- Позиции в \`line\`/\`character\` нумеруются с нуля.
+- Файлы вне рабочего каталога сервера дают \`File is not part of any registered workspace\`. Тогда переподключи сервер с нужным корнем: \`mcp_pin("bsl", root: "<каталог конфигурации>")\` — путь проекта видно в \`edt__list_projects\`.`;
 
 const TASKS_RULES = `
 ### Система задач (\`tasks__*\`)
@@ -171,16 +173,31 @@ export async function apply(ctx, config) {
       if (item.entry.unavailable) value = 'unavailable';
       if (item.fiber && !item.error) value = 'mounted';
       if (item.error) value = 'failed';
-      return { name: item.entry.name, state: value, transport: item.entry.transport, tools: toolNamesOf(item.entry.name).length };
+      return {
+        name: item.entry.name,
+        state: value,
+        transport: item.supervisor ? 'lsp+mcp' : item.entry.transport,
+        root: item.supervisor?.root,
+        endpoint: item.supervisor?.url,
+        tools: toolNamesOf(item.entry.name).length,
+      };
     });
 
-  const mount = async (serverName) => {
+  const mount = async (serverName, options = {}) => {
     const item = state.get(serverName);
     if (item === undefined) {
       throw new Error(`unknown MCP server "${serverName}"; configured: ${[...state.keys()].join(', ') || 'none'}`);
     }
     if (item.entry.unavailable) {
       throw new Error(`MCP server "${serverName}" is configured but not available: environment for it is not set`);
+    }
+    // Смена корня — повод перезапустить provisioned-сервер: BSL LS получает
+    // рабочие каталоги только при старте LSP-сессии.
+    if (item.fiber && options.root !== undefined && item.supervisor !== null && item.supervisor?.root !== options.root) {
+      await item.fiber.dispose().catch(() => {});
+      item.fiber = null;
+      await item.supervisor?.stop();
+      item.supervisor = null;
     }
     if (item.fiber && !item.error) return { already: true, tools: toolNamesOf(serverName).length };
 
@@ -192,13 +209,15 @@ export async function apply(ctx, config) {
       try {
         const log = (message) => ctx.logger?.info?.(`mcp-hub(${serverName}): ${message}`);
         let resolved;
+        const root = options.root ?? bsl.root;
+        const mode = options.mode ?? bsl.mode;
         if (bsl.mcpUrl !== undefined) {
           resolved = { transport: 'streamable-http', url: bsl.mcpUrl };
-        } else if (bsl.mode === 'stdio') {
+        } else if (mode === 'stdio') {
           resolved = await resolveBsl(bsl, { log });
         } else {
           const jar = await ensureJar(bsl, { log });
-          const supervisor = await startBslSupervisor({ jar, java: bsl.java, root: bsl.root, port: bsl.port, log });
+          const supervisor = await startBslSupervisor({ jar, java: bsl.java, root, port: bsl.port, log });
           item.supervisor = supervisor;
           resolved = { transport: 'streamable-http', url: supervisor.url };
         }
@@ -255,10 +274,15 @@ export async function apply(ctx, config) {
   ctx.tools.register(
     textTool(
       'mcp_servers',
-      'List MCP servers of this profile: whether each is mounted, lazy (mount with mcp_pin) or unavailable, and how many tools it currently contributes.',
+      'List MCP servers of this profile: whether each is mounted, lazy (mount with mcp_pin) or unavailable, how many tools it contributes, and for a supervised server its workspace root and endpoint.',
       {},
       async () => {
-        const rows = snapshot().map((item) => `${item.name}: ${item.state}, ${item.transport}, tools: ${item.tools}`);
+        const rows = snapshot().map((item) => {
+          const extra = [item.root === undefined ? null : `root: ${item.root}`, item.endpoint === undefined ? null : `endpoint: ${item.endpoint}`]
+            .filter(Boolean)
+            .join(', ');
+          return `${item.name}: ${item.state}, ${item.transport}, tools: ${item.tools}${extra ? `, ${extra}` : ''}`;
+        });
         return { text: rows.length > 0 ? rows.join('\n') : 'No MCP servers are configured.' };
       },
     ),
@@ -266,15 +290,21 @@ export async function apply(ctx, config) {
 
   const serverParam = {
     server: { type: 'string', description: 'Server name as reported by mcp_servers.', required: true },
+    root: {
+      type: 'string',
+      description:
+        'For a supervised server (bsl): workspace root to open, for example the configuration source directory. Remounts the server when it differs from the current root.',
+    },
+    mode: { type: 'string', description: 'For a provisioned server: "hybrid" (LSP+MCP with workspace roots, default) or "stdio".' },
   };
 
   ctx.tools.register(
     textTool(
       'mcp_pin',
-      'Mount a configured MCP server now, so its tools appear in this session. Use when the task needs that server (diagnostics, types, task tracker).',
+      'Mount a configured MCP server now, so its tools appear in this session. Use when the task needs that server (diagnostics, types, task tracker). For bsl pass root with the configuration directory.',
       serverParam,
       async (args) => {
-        const result = await mount(args.server);
+        const result = await mount(args.server, { root: args.root, mode: args.mode });
         if (result.error) throw new Error(`mcp_pin(${args.server}) failed: ${result.error}`);
         if (result.already) return { text: `${args.server} is already mounted (${result.tools} tools).` };
         return { text: `${args.server} mounted (${result.tools} tools). They are available from the next step.` };

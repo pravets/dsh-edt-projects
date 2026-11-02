@@ -23,6 +23,7 @@ test('bsl описывается, когда сервер настроен да�
   assert.match(text, /bsl__\*/);
   assert.match(text, /Подключены по требованию: bsl/);
   assert.match(text, /mcp_pin/);
+  assert.match(text, /root/);
 });
 
 test('недоступный сервер не описывается как рабочий, но назван', () => {
