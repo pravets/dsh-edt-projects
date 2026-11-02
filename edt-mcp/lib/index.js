@@ -7,8 +7,7 @@
 //
 // Серверы описываются в config.servers (см. cordis.patch.yml):
 //   edt:   { transport: streamable-http, url, headers, toolCallTimeoutMs, lazy: false }
-//   bsl:   { lazy: true, transport: stdio, command, args, cwd }
-//   bsl:   { lazy: true, transport: streamable-http, url }
+//   bsl:   { lazy: true, provision: true }   — jar берётся из env/кэша, иначе качается
 //   tasks: { lazy: true, transport: streamable-http, url, headers }
 //
 // Лишние ключи (например url у stdio-сервера) отбрасываются: схема
@@ -16,6 +15,8 @@
 export const name = 'mcp-hub';
 
 export const inject = ['tools'];
+
+import { bslAvailable, bslSettings, resolveBsl } from './bsl.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -32,6 +33,7 @@ const PIN_RULES = `
 Часть серверов не подключена заранее, чтобы не занимать контекст их схемами. Посмотреть состояние — \`mcp_servers\`; подключить — \`mcp_pin(server)\`, отключить — \`mcp_unpin(server)\`.
 
 - Подключай сервер сам, когда задача без него не решается: нужна диагностика или типы — \`bsl\`, нужны задачи или статусы — \`tasks\`.
+- Первый \`mcp_pin("bsl")\` может занять время: при отсутствии готового jar сервер скачивается (~130 МБ). Предупреди пользователя, если это долго.
 - После \`mcp_unpin\` инструменты сервера исчезают из запроса. Не отключай сервер, пока работа с ним не закончена.
 - Если сервер помечен как не настроенный, не пытайся его подключить: скажи пользователю, чего не хватает.`;
 
@@ -142,7 +144,16 @@ const textTool = (toolName, description, parameters, execute) => ({
 });
 
 export async function apply(ctx, config) {
-  const entries = normalizeServers(config?.servers);
+  const bsl = bslSettings(process.env);
+  const entries = normalizeServers(config?.servers).map((entry) => {
+    // provision: параметры запуска добираются на mcp_pin (для BSL LS — скачивание jar).
+    if (entry.raw.provision === true) {
+      entry.provisioned = true;
+      entry.transport = bsl.mcpUrl === undefined ? 'stdio' : 'streamable-http';
+      if (!bslAvailable(bsl)) entry.unavailable = true;
+    }
+    return entry;
+  });
   const state = new Map(entries.map((entry) => [entry.name, { entry, fiber: null, error: null }]));
 
   const toolNamesOf = (serverName) => {
@@ -173,8 +184,30 @@ export async function apply(ctx, config) {
     }
     if (item.fiber && !item.error) return { already: true, tools: toolNamesOf(serverName).length };
 
+    // provisioned-сервер сам добирает параметры запуска: скачивает jar BSL LS
+    // в кэш и отдаёт готовую команду. Ошибка скачивания — понятный отказ.
+    let entry = item.entry;
+    if (entry.provisioned) {
+      try {
+        const resolved = await resolveBsl(bsl, { log: (message) => ctx.logger?.info?.(`mcp-hub(${serverName}): ${message}`) });
+        entry = {
+          ...entry,
+          transport: resolved.transport,
+          raw: {
+            ...resolved,
+            toolCallTimeoutMs: entry.raw.toolCallTimeoutMs,
+            failOnStartupError: entry.raw.failOnStartupError,
+            reconnect: entry.raw.reconnect,
+          },
+        };
+      } catch (error) {
+        item.error = error instanceof Error ? error.message : String(error);
+        return { already: false, tools: 0, error: item.error };
+      }
+    }
+
     const McpClient = await import('@deepseek-ai/dsh-mcp-client');
-    const fiber = ctx.plugin(McpClient, mountConfig(item.entry));
+    const fiber = ctx.plugin(McpClient, mountConfig(entry));
     item.fiber = fiber;
     item.error = null;
     try {

@@ -23,6 +23,7 @@ edt-mcp/
   package.json           манифест бандла (dsh.bundle.patch, main, зависимости)
   cordis.patch.yml       config.servers: EDT, BSL LS (stdio/http), задачи + lazy
   lib/index.js           хаб mcp-hub: монтаж серверов, mcp_servers/pin/unpin, правила
+  lib/bsl.mjs            поиск и автозагрузка jar BSL Language Server (sha256)
   locale/en.json         название и описание для карточки плагина
   locale/ru.json
   icon.svg
@@ -32,6 +33,7 @@ tools/
   stub-mcp-server.mjs    заглушка MCP-сервера для smoke
   smoke-bundle.mjs       прогон бандла в одноразовом профиле DSH
   rules.test.mjs         тесты правил и преобразования конфигурации серверов
+  bsl.test.mjs           тесты автозагрузки BSL LS
 .github/workflows/
   ci.yml                 валидация на push и pull request
   release.yml            tarball бандла в GitHub Release по тегу v*
@@ -109,27 +111,51 @@ plugin_manager {
 |---|---|---|
 | `EDT_MCP_URL` | MCP-сервер EDT (`mcp__edt__*`) | `http://127.0.0.1:8767/mcp` |
 | `EDT_MCP_TOKEN` | заголовок `Authorization: Bearer` для EDT | не задан |
-| `BSL_LS_JAR` | BSL Language Server по **stdio**: DSH сам запускает `java -jar … mcp` | не задан |
-| `BSL_LS_JAVA`, `BSL_LS_CWD` | java-исполняемый файл и рабочий каталог для stdio | `java`, текущий каталог |
-| `BSL_MCP_URL` | BSL LS по **Streamable HTTP**, если сервер уже запущен (`lsp --mcp`) | не задан |
+| `DSH_1C_BSL_LS_JAR` | готовый jar BSL Language Server (главнее остальных настроек) | не задан |
+| `DSH_1C_BSL_LS_URL` | прямой URL на jar вместо GitHub | не задан |
+| `DSH_1C_BSL_LS_VERSION` | тег релиза GitHub, например `v1.0.7` | последний релиз |
+| `DSH_1C_BSL_LS_CACHE` | каталог кэша jar | `$DSH_HOME/cache/bsl-language-server` |
+| `DSH_1C_BSL_LS_DOWNLOAD` | `0` — не скачивать, работать только с готовым jar | скачивание разрешено |
+| `DSH_1C_BSL_LS_JAVA` | java-команда | `java` |
+| `DSH_1C_BSL_LS_CWD` | рабочий каталог BSL LS (корень исходников) | текущий каталог |
+| `DSH_1C_BSL_MCP_URL` | адрес уже запущенного BSL LS по Streamable HTTP (`lsp --mcp`) | не задан |
 | `TASKS_MCP_URL` | MCP-сервер системы задач (`mcp__tasks__*`) | не задан |
 | `TASKS_MCP_TOKEN` | заголовок `Authorization: Bearer` для трекера | не задан |
 
-У каждого сервера в патче есть два флага:
+Старые имена `BSL_LS_JAR`, `BSL_LS_JAVA`, `BSL_LS_CWD`, `BSL_MCP_URL` пока
+принимаются как запасные, но новые `DSH_1C_*` главнее.
+
+У каждого сервера в патче есть три флага:
 
 - `lazy: true` — сервер не подключается на старте и не занимает контекст;
   его инструменты появляются после вызова `mcp_pin("имя")`;
-- `unavailable: !!js '…'` — сервер описан, но окружение не задано: в правилах
+- `provision: true` — параметры запуска добираются на `mcp_pin` (см. ниже);
+- `unavailable: !!js '…'` — сервер описан, но настроить его нечем: в правилах
   он назван, а `mcp_pin` вернёт понятную ошибку вместо тишины.
 
 Сейчас EDT подключается сразу (`lazy: false`), а `bsl` и `tasks` — по требованию.
-BSL LS при наличии `BSL_LS_JAR` поднимается по stdio, иначе подключается по
-`BSL_MCP_URL`; лишние для выбранного транспорта поля хаб отбрасывает сам.
+
+## Автозагрузка BSL Language Server
+
+Если `DSH_1C_BSL_LS_JAR` не задан, хаб скачивает сервер сам при первом
+`mcp_pin("bsl")`:
+
+1. если задан `DSH_1C_BSL_LS_URL` — качает по нему;
+2. если задан `DSH_1C_BSL_LS_VERSION` — берёт этот тег, иначе последний релиз;
+3. из релиза [1c-syntax/bsl-language-server](https://github.com/1c-syntax/bsl-language-server)
+   выбирается fat-jar `bsl-language-server-<версия>-exec.jar` (~130 МБ);
+4. файл пишется как `<jar>.part` и переименовывается только после сверки
+   `sha256` из GitHub API — битая загрузка не останется в кэше;
+5. jar кладётся в `DSH_1C_BSL_LS_CACHE` и переиспользуется: следующие pin
+   не ходят в сеть.
+
+Скачивание блокирует только вызов `mcp_pin`, а не запуск DSH. При
+`DSH_1C_BSL_LS_DOWNLOAD=0` сервер считается ненастроенным, пока нет готового jar.
 
 Про BSL Language Server: его режим MCP помечен как экспериментальный, а рабочие
 пространства он получает через MCP roots — `dsh-mcp-client` roots не отправляет.
 Поэтому межфайловые вещи (`find_references` по всему проекту) ограничены; для
-корректных границ конфигурации задайте `BSL_LS_CWD` в корне исходников или
+корректных границ конфигурации задайте `DSH_1C_BSL_LS_CWD` в корне исходников или
 запускайте LS с конфигурационным файлом, где указан `configurationRoot`.
 
 ## Подключение по требованию

@@ -1,16 +1,23 @@
 # Хаб MCP-серверов для разработки на 1С.
 #
 # Серверы описываются здесь и подключаются плагином mcp-hub (lib/index.js):
-#   - `lazy: true`  — не занимать контекст: сервер монтируется по вызову mcp_pin
-#   - `unavailable` — сервер описан, но окружение не задано (mcp_pin скажет, чего нет)
+#   - `lazy: true`      — не занимать контекст: сервер монтируется по вызову mcp_pin
+#   - `provision: true` — параметры запуска добираются на mcp_pin (BSL LS скачивается)
+#   - `unavailable`     — сервер описан, но настроить его нечем (mcp_pin объяснит, чем)
 #
-# Переменные окружения:
-#   EDT_MCP_URL      адрес MCP-сервера EDT            (по умолчанию 127.0.0.1:8767)
-#   EDT_MCP_TOKEN    токен, если он включён в EDT
-#   BSL_LS_JAR       путь к bsl-language-server.jar   -> BSL LS поднимается по stdio
-#   BSL_MCP_URL      адрес запущенного BSL LS         -> подключение по Streamable HTTP
-#   TASKS_MCP_URL    адрес MCP-сервера системы задач
-#   TASKS_MCP_TOKEN  токен системы задач
+# Переменные окружения (префикс DSH_1C_ — чтобы ни с чем не пересекаться):
+#   EDT_MCP_URL               адрес MCP-сервера EDT (по умолчанию 127.0.0.1:8767)
+#   EDT_MCP_TOKEN             токен, если он включён в EDT
+#   DSH_1C_BSL_LS_JAR         готовый bsl-language-server jar (главнее всего)
+#   DSH_1C_BSL_LS_URL         прямой URL на jar вместо GitHub
+#   DSH_1C_BSL_LS_VERSION     тег релиза, например v1.0.7 (по умолчанию последний)
+#   DSH_1C_BSL_LS_CACHE       каталог кэша ($DSH_HOME/cache/bsl-language-server)
+#   DSH_1C_BSL_LS_DOWNLOAD    «0» — не скачивать, использовать только готовый jar
+#   DSH_1C_BSL_LS_JAVA        java-команда (по умолчанию java)
+#   DSH_1C_BSL_LS_CWD         корень исходников для BSL LS
+#   DSH_1C_BSL_MCP_URL        адрес уже запущенного BSL LS по Streamable HTTP
+#   TASKS_MCP_URL             адрес MCP-сервера системы задач
+#   TASKS_MCP_TOKEN           токен системы задач
 - insert:
     - id: mcp-hub
       name: '@local/dsh-edt-mcp'
@@ -31,16 +38,12 @@
               maxDelayMs: 30000
               maxAttempts: 1000
 
-          # BSL Language Server: 10 инструментов, нужны эпизодически — держим за pin.
+          # BSL Language Server: 10 инструментов, нужны эпизодически.
+          # provision: на mcp_pin берётся готовый jar из DSH_1C_BSL_LS_JAR, иначе из
+          # кэша, иначе скачивается последний релиз с GitHub (sha256 сверяется).
           bsl:
             lazy: true
-            unavailable: !!js '!process.env.BSL_LS_JAR && !process.env.BSL_MCP_URL'
-            # Есть jar — поднимаем stdio сами; иначе подключаемся к запущенному серверу.
-            transport: !!js 'process.env.BSL_LS_JAR ? "stdio" : "streamable-http"'
-            command: !!js 'process.env.BSL_LS_JAVA ?? "java"'
-            args: !!js '["-jar", process.env.BSL_LS_JAR ?? "", "mcp"]'
-            cwd: !!js 'process.env.BSL_LS_CWD ?? ""'
-            url: !!js 'process.env.BSL_MCP_URL ?? "http://127.0.0.1:8080/mcp"'
+            provision: true
             toolCallTimeoutMs: 120000
             failOnStartupError: false
 

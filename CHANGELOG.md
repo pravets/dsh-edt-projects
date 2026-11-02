@@ -5,6 +5,29 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-02
+
+### Добавлено
+
+- Автозагрузка BSL Language Server: если `DSH_1C_BSL_LS_JAR` не задан, при первом
+  `mcp_pin("bsl")` хаб скачивает fat-jar `bsl-language-server-<версия>-exec.jar`
+  из релизов 1c-syntax/bsl-language-server, сверяет `sha256` из GitHub API,
+  пишет через `.part` и кэширует.
+- Переменные `DSH_1C_BSL_LS_URL`, `DSH_1C_BSL_LS_VERSION`, `DSH_1C_BSL_LS_CACHE`,
+  `DSH_1C_BSL_LS_DOWNLOAD`, `DSH_1C_BSL_LS_JAVA`, `DSH_1C_BSL_LS_CWD`,
+  `DSH_1C_BSL_MCP_URL` с префиксом `DSH_1C_`, чтобы не пересекаться с окружением
+  машины; старые имена `BSL_LS_*` принимаются как запасные.
+- Флаг `provision: true` у сервера: параметры запуска добираются на `mcp_pin`.
+- `tools/bsl.test.mjs` — 9 тестов: приоритет настроек, выбор ассета, кэш,
+  скачивание с проверкой sha256, отказ при запрете скачивания.
+
+### Изменено
+
+- `mcp_servers` показывает BSL LS как `lazy` (а не `unavailable`): сервер можно
+  подготовить самому, скачав jar.
+- Правила для модели предупреждают, что первый `mcp_pin("bsl")` может скачивать
+  ~130 МБ.
+
 ## [1.1.0] - 2026-11-02
 
 ### Добавлено
