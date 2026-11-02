@@ -1,70 +1,56 @@
-# Бандл подключает MCP-серверы для работы с 1С и добавляет в системный промпт
-# правила выбора инструментов.
+# Хаб MCP-серверов для разработки на 1С.
 #
-# Строки включаются окружением, ничего переустанавливать не нужно:
+# Серверы описываются здесь и подключаются плагином mcp-hub (lib/index.js):
+#   - `lazy: true`  — не занимать контекст: сервер монтируется по вызову mcp_pin
+#   - `unavailable` — сервер описан, но окружение не задано (mcp_pin скажет, чего нет)
+#
+# Переменные окружения:
 #   EDT_MCP_URL      адрес MCP-сервера EDT            (по умолчанию 127.0.0.1:8767)
 #   EDT_MCP_TOKEN    токен, если он включён в EDT
-#   BSL_LS_JAR       путь к bsl-language-server.jar   -> сервер поднимается по stdio
-#   BSL_MCP_URL      адрес уже запущенного BSL LS    -> подключение по Streamable HTTP
+#   BSL_LS_JAR       путь к bsl-language-server.jar   -> BSL LS поднимается по stdio
+#   BSL_MCP_URL      адрес запущенного BSL LS         -> подключение по Streamable HTTP
 #   TASKS_MCP_URL    адрес MCP-сервера системы задач
 #   TASKS_MCP_TOKEN  токен системы задач
-#
-# Правила выбора инструментов публикует плагин mcp-rules (lib/index.js бандла).
 - insert:
-    - id: mcp-rules
+    - id: mcp-hub
       name: '@local/dsh-edt-mcp'
-
-    - id: edt-mcp
-      name: '@deepseek-ai/dsh-mcp-client'
       config:
-        serverName: edt
-        transport: streamable-http
-        url: !!js 'process.env.EDT_MCP_URL ?? "http://127.0.0.1:8767/mcp"'
-        headers: !!js 'process.env.EDT_MCP_TOKEN ? { Authorization: `Bearer ${process.env.EDT_MCP_TOKEN}` } : {}'
-        # Операции EDT (update_database, run_yaxunit_tests, валидация) идут дольше 60 с.
-        toolCallTimeoutMs: 900000
-        # EDT часто закрыт: не валить активацию, ждать сервер.
-        failOnStartupError: false
-        reconnect:
-          enabled: true
-          initialDelayMs: 1000
-          maxDelayMs: 30000
-          maxAttempts: 1000
+        servers:
+          edt:
+            lazy: false
+            transport: streamable-http
+            url: !!js 'process.env.EDT_MCP_URL ?? "http://127.0.0.1:8767/mcp"'
+            headers: !!js 'process.env.EDT_MCP_TOKEN ? { Authorization: `Bearer ${process.env.EDT_MCP_TOKEN}` } : {}'
+            # Операции EDT (update_database, run_yaxunit_tests, валидация) идут дольше 60 с.
+            toolCallTimeoutMs: 900000
+            # EDT часто закрыт: не валить активацию, ждать сервер.
+            failOnStartupError: false
+            reconnect:
+              enabled: true
+              initialDelayMs: 1000
+              maxDelayMs: 30000
+              maxAttempts: 1000
 
-    # BSL LS по stdio: DSH сам запускает java и владеет жизненным циклом.
-    - id: bsl-mcp-stdio
-      name: '@deepseek-ai/dsh-mcp-client'
-      disabled: !!js '!process.env.BSL_LS_JAR'
-      config:
-        serverName: bsl
-        transport: stdio
-        command: !!js 'process.env.BSL_LS_JAVA ?? "java"'
-        args: !!js '["-jar", process.env.BSL_LS_JAR ?? "", "mcp"]'
-        cwd: !!js 'process.env.BSL_LS_CWD ?? ""'
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
+          # BSL Language Server: 10 инструментов, нужны эпизодически — держим за pin.
+          bsl:
+            lazy: true
+            unavailable: !!js '!process.env.BSL_LS_JAR && !process.env.BSL_MCP_URL'
+            # Есть jar — поднимаем stdio сами; иначе подключаемся к запущенному серверу.
+            transport: !!js 'process.env.BSL_LS_JAR ? "stdio" : "streamable-http"'
+            command: !!js 'process.env.BSL_LS_JAVA ?? "java"'
+            args: !!js '["-jar", process.env.BSL_LS_JAR ?? "", "mcp"]'
+            cwd: !!js 'process.env.BSL_LS_CWD ?? ""'
+            url: !!js 'process.env.BSL_MCP_URL ?? "http://127.0.0.1:8080/mcp"'
+            toolCallTimeoutMs: 120000
+            failOnStartupError: false
 
-    # BSL LS по HTTP: сервер уже запущен (lsp --mcp / mcp --protocol streamable).
-    # Выключена, если задан BSL_LS_JAR — иначе два клиента заняли бы одно имя bsl.
-    - id: bsl-mcp-http
-      name: '@deepseek-ai/dsh-mcp-client'
-      disabled: !!js '!process.env.BSL_MCP_URL || !!process.env.BSL_LS_JAR'
-      config:
-        serverName: bsl
-        transport: streamable-http
-        url: !!js 'process.env.BSL_MCP_URL ?? "http://127.0.0.1:8080/mcp"'
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
-
-    # Система задач: пока место зарезервировано под любой MCP-сервер.
-    # Конкретный продукт (YouTrack, Jira, GitLab, GitHub) задаётся адресом и токеном.
-    - id: tasks-mcp
-      name: '@deepseek-ai/dsh-mcp-client'
-      disabled: !!js '!process.env.TASKS_MCP_URL'
-      config:
-        serverName: tasks
-        transport: streamable-http
-        url: !!js 'process.env.TASKS_MCP_URL ?? "http://127.0.0.1:8090/mcp"'
-        headers: !!js 'process.env.TASKS_MCP_TOKEN ? { Authorization: `Bearer ${process.env.TASKS_MCP_TOKEN}` } : {}'
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
+          # Система задач: место зарезервировано под любой MCP-сервер.
+          # Конкретный продукт (YouTrack, Jira, GitLab, GitHub) — это его адрес и токен.
+          tasks:
+            lazy: true
+            unavailable: !!js '!process.env.TASKS_MCP_URL'
+            transport: streamable-http
+            url: !!js 'process.env.TASKS_MCP_URL ?? "http://127.0.0.1:8090/mcp"'
+            headers: !!js 'process.env.TASKS_MCP_TOKEN ? { Authorization: `Bearer ${process.env.TASKS_MCP_TOKEN}` } : {}'
+            toolCallTimeoutMs: 120000
+            failOnStartupError: false

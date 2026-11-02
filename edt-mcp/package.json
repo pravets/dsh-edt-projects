@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-edt-mcp",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "MCP servers for 1C development (EDT, BSL Language Server, task tracker) with model-facing usage rules",
+  "description": "MCP hub for 1C development: EDT always on, BSL Language Server and a task tracker mounted on demand, with model-facing usage rules",
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -11,6 +11,9 @@
     "./icon": "./icon.svg"
   },
   "files": ["lib", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "dependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.5"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

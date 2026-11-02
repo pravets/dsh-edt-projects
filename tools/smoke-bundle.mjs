@@ -62,16 +62,17 @@ function run(args, { env, allowFailure = false, label } = {}) {
   return res;
 }
 
-// Настройки строки плагина берутся из самого патча: тест проверяет то,
-// что реально уезжает в профиль, а не отдельную копию настроек.
-function readPatchRow() {
+// Строка самого бандла берётся из патча: тест проверяет то, что реально
+// уезжает в профиль, а не отдельную копию настроек.
+function readHubRow() {
   const rows = parsePatch(readFileSync(patchFile, 'utf8'));
+  const manifest = JSON.parse(readFileSync(join(root, 'edt-mcp', 'package.json'), 'utf8'));
   for (const row of rows ?? []) {
     for (const item of row?.insert ?? []) {
-      if (String(item?.name ?? '').includes('mcp-client')) return item;
+      if (item?.name === manifest.name) return item;
     }
   }
-  throw new Error('в cordis.patch.yml нет строки dsh-mcp-client');
+  throw new Error(`в cordis.patch.yml нет строки бандла ${manifest.name}`);
 }
 
 function findTarball() {
@@ -90,7 +91,7 @@ async function main() {
   const bin = dshBin();
   if (!bin) throw new Error('не найден @deepseek-ai/dsh: задайте DSH_BIN или установите пакет');
 
-  const row = readPatchRow();
+  const hub = readHubRow();
   const tarball = findTarball();
 
   // В CI порт из патча свободен, поэтому тестируется штатный путь без переопределений.
@@ -100,8 +101,9 @@ async function main() {
   const targetUrl = override ?? `http://127.0.0.1:${port}/mcp`;
   const url = new URL(targetUrl);
 
+  const servers = Object.keys(hub.config?.servers ?? {});
   console.log(`tarball: ${tarball}`);
-  console.log(`строка сервера: ${row.config.serverName}, ожидаемый адрес ${targetUrl}${override ? ' (переопределён)' : ''}`);
+  console.log(`серверы хаба: ${servers.join(', ')}; ожидаемый адрес EDT ${targetUrl}${override ? ' (переопределён)' : ''}`);
 
   const home = join(root, '.smoke', 'run');
   rmSync(home, { recursive: true, force: true });
@@ -120,9 +122,10 @@ async function main() {
   console.log('[3/4] проверяю композицию профиля');
   const dump = run(['--profile', 'headless', '--dump-config'], { env, label: 'dsh --dump-config' });
   const composed = `${dump.stdout}${dump.stderr}`;
-  if (!/edt[-_]mcp/.test(composed)) fail('в композиции профиля нет строки edt-mcp');
-  if (!composed.includes('mcp-rules')) fail('в композиции нет плагина правил mcp-rules');
-  if (!composed.includes(row.config.serverName)) fail(`в композиции нет serverName ${row.config.serverName}`);
+  if (!/edt[-_]mcp/.test(composed)) fail('в композиции профиля нет строки бандла');
+  if (!composed.includes('mcp-hub')) fail('в композиции нет плагина mcp-hub');
+  if (!hub.config?.servers?.edt) fail('в конфиге хаба нет сервера edt');
+  if (!composed.includes('edt')) fail('в композиции нет сервера edt');
   // Значение url приходит из !!js-выражения: загрузчик может напечатать как
   // вычисленный адрес, так и само выражение — принимаем оба варианта.
   if (!composed.includes(targetUrl) && !composed.includes('process.env.EDT_MCP_URL')) {

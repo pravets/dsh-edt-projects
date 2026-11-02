@@ -126,11 +126,9 @@ if (patchPath && existsSync(patchPath)) {
           fail(`${at}: disabled должен быть true или !!js-выражением`);
         }
         const config = item.config;
-        // Плагин без настроек — норма (например, mcp-rules); клиенту MCP config обязателен.
-        if (config === undefined) {
-          if (String(item.name).includes('mcp-client')) fail(`${at} — нет config`);
-          return;
-        }
+        // Подробно проверяем только клиента MCP: у прочих плагинов своя схема.
+        if (!String(item.name).includes('mcp-client')) return;
+        if (config === undefined) return fail(`${at} — нет config`);
         if (typeof config !== 'object') return fail(`${at} — config не объект`);
         if (config.transport === 'stdio') {
           if (!config.command) fail(`${at}: transport=stdio требует command`);
@@ -150,6 +148,23 @@ if (patchPath && existsSync(patchPath)) {
       });
 
       if (inserted.length > 0) pass(`патч: ${inserted.length} вставка(и)`);
+
+      // Строка самого бандла: у неё должен быть непустой список серверов.
+      const hub = inserted.find((item) => item?.name === manifest?.name);
+      if (!hub) {
+        fail(`cordis.patch.yml: нет строки самого бандла (name: ${manifest?.name ?? '?'})`);
+      } else {
+        const servers = hub.config?.servers;
+        if (!servers || typeof servers !== 'object' || Object.keys(servers).length === 0) {
+          fail('cordis.patch.yml: у mcp-hub нет config.servers');
+        } else {
+          const names = Object.keys(servers);
+          const lazy = names.filter((name) => servers[name]?.lazy === true);
+          const eager = names.filter((name) => servers[name]?.lazy !== true && servers[name]?.unavailable === undefined);
+          if (eager.length === 0) fail(`cordis.patch.yml: ни один сервер не подключается сразу (${names.join(', ')}) — в сессии не будет MCP-инструментов до mcp_pin`);
+          else pass(`mcp-hub: ${names.length} сервер(а), сразу: ${eager.join(', ')}${lazy.length ? `, по требованию: ${lazy.join(', ')}` : ''}`);
+        }
+      }
 
       // Два всегда включённых клиента с одним serverName уронили бы активацию.
       const always = inserted.filter((item) => item?.config?.serverName && item.disabled === undefined);
