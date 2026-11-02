@@ -3,7 +3,7 @@
 //
 // Запуск:
 //   node tools/validate-bundle.mjs            обычная проверка
-//   node tools/validate-bundle.mjs --tag v2.0.0   дополнительно сверить версию с тегом
+//   node tools/validate-bundle.mjs --tag v1.1.0   дополнительно сверить версию с тегом
 //
 // Код возврата: 0 — замечаний нет, 1 — есть.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';

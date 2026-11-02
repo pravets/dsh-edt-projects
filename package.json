@@ -1,6 +1,6 @@
 {
   "name": "dsh-edt-plugin",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness bundle that connects the 1C:EDT MCP server",
