@@ -5,6 +5,26 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-02
+
+### Добавлено
+
+- BSL LS запускается в гибридном режиме `lsp --mcp`: LSP-инициализация объявляет
+  рабочее пространство (`DSH_1C_BSL_LS_ROOT`), MCP открывается по Streamable HTTP
+  на том же процессе. Без этого все инструменты падали с
+  `File is not part of any registered workspace`: `dsh-mcp-client` не объявляет
+  capability `roots`, а BSL LS берёт корни только оттуда.
+- Переменные `DSH_1C_BSL_LS_ROOT`, `DSH_1C_BSL_LS_PORT`, `DSH_1C_BSL_LS_MODE`
+  (`hybrid` по умолчанию, `stdio` — старый режим без корней).
+- Хаб гасит процесс BSL LS при `mcp_unpin` и при выгрузке плагина.
+
+### Изменено
+
+- `resolveBsl` остался для режима `stdio`; по умолчанию используется
+  `startBslSupervisor`.
+- Проверено на живом сервере: после `mcp_pin("bsl")` `analyze_file` вернул 57
+  диагностик по модулю `Catalogs/Организации/ManagerModule.bsl`.
+
 ## [1.2.0] - 2026-11-02
 
 ### Добавлено

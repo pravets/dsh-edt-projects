@@ -117,7 +117,10 @@ plugin_manager {
 | `DSH_1C_BSL_LS_CACHE` | каталог кэша jar | `$DSH_HOME/cache/bsl-language-server` |
 | `DSH_1C_BSL_LS_DOWNLOAD` | `0` — не скачивать, работать только с готовым jar | скачивание разрешено |
 | `DSH_1C_BSL_LS_JAVA` | java-команда | `java` |
-| `DSH_1C_BSL_LS_CWD` | рабочий каталог BSL LS (корень исходников) | текущий каталог |
+| `DSH_1C_BSL_LS_ROOT` | корень рабочего пространства для BSL LS | рабочий каталог DSH |
+| `DSH_1C_BSL_LS_MODE` | `hybrid` (LSP+MCP, по умолчанию) или `stdio` | `hybrid` |
+| `DSH_1C_BSL_LS_PORT` | порт встроенного веб-сервера | свободный |
+| `DSH_1C_BSL_LS_CWD` | рабочий каталог процесса BSL LS | текущий каталог |
 | `DSH_1C_BSL_MCP_URL` | адрес уже запущенного BSL LS по Streamable HTTP (`lsp --mcp`) | не задан |
 | `TASKS_MCP_URL` | MCP-сервер системы задач (`mcp__tasks__*`) | не задан |
 | `TASKS_MCP_TOKEN` | заголовок `Authorization: Bearer` для трекера | не задан |
@@ -151,6 +154,28 @@ plugin_manager {
 
 Скачивание блокирует только вызов `mcp_pin`, а не запуск DSH. При
 `DSH_1C_BSL_LS_DOWNLOAD=0` сервер считается ненастроенным, пока нет готового jar.
+
+### Почему гибридный режим
+
+BSL LS получает рабочие пространства **только** через MCP roots, а `dsh-mcp-client`
+этот capability не объявляет (`ClientCapabilities[..., roots=null, ...]`). Поэтому
+режим `mcp` по stdio отдаёт инструменты, но любой вызов файла заканчивается
+`File is not part of any registered workspace`.
+
+Хаб обходит это так: запускает `java -jar … lsp --mcp --server.port=<свободный>`,
+сразу отправляет LSP-`initialize` с `workspaceFolders` = `DSH_1C_BSL_LS_ROOT`
+(по умолчанию рабочий каталог DSH) и подключает `dsh-mcp-client` уже к
+`http://127.0.0.1:<порт>/mcp`. Один процесс обслуживает и LSP, и MCP.
+
+```
+DSH_1C_BSL_LS_ROOT=C:\git\tmut\src\cf   # корень конфигурации
+```
+
+Режим `DSH_1C_BSL_LS_MODE=stdio` оставлен для случая, когда корни не нужны
+(например, только `type_info`/`global_member_search`).
+
+При `mcp_unpin` и при выгрузке плагина процесс java гасится; при
+`DSH_1C_BSL_MCP_URL` хаб ничего не запускает, а подключается к готовому серверу.
 
 Про BSL Language Server: его режим MCP помечен как экспериментальный, а рабочие
 пространства он получает через MCP roots — `dsh-mcp-client` roots не отправляет.

@@ -4,12 +4,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { bslAvailable, bslSettings, ensureJar, resolveBsl, selectExecAsset } from '../edt-mcp/lib/bsl.mjs';
 
-const tempDir = () => mkdtempSync(join(tmpdir(), 'dsh-bsl-'));
+// Временные каталоги держим внутри рабочего каталога: системный TMP в
+// ограниченном режиме может быть недоступен, а .smoke/ уже в .gitignore.
+const base = join(process.cwd(), '.smoke');
+mkdirSync(base, { recursive: true });
+const tempDir = () => mkdtempSync(join(base, 'bsl-test-'));
 const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex');
 
 const release = (tag, body) => ({

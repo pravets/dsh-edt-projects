@@ -16,7 +16,7 @@ export const name = 'mcp-hub';
 
 export const inject = ['tools'];
 
-import { bslAvailable, bslSettings, resolveBsl } from './bsl.mjs';
+import { bslAvailable, bslSettings, ensureJar, resolveBsl, startBslSupervisor } from './bsl.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -185,11 +185,23 @@ export async function apply(ctx, config) {
     if (item.fiber && !item.error) return { already: true, tools: toolNamesOf(serverName).length };
 
     // provisioned-сервер сам добирает параметры запуска: скачивает jar BSL LS
-    // в кэш и отдаёт готовую команду. Ошибка скачивания — понятный отказ.
+    // и, если нужно, поднимает его в гибридном режиме — LSP объявляет корни,
+    // MCP отдаётся по HTTP на том же процессе. Ошибка — понятный отказ.
     let entry = item.entry;
     if (entry.provisioned) {
       try {
-        const resolved = await resolveBsl(bsl, { log: (message) => ctx.logger?.info?.(`mcp-hub(${serverName}): ${message}`) });
+        const log = (message) => ctx.logger?.info?.(`mcp-hub(${serverName}): ${message}`);
+        let resolved;
+        if (bsl.mcpUrl !== undefined) {
+          resolved = { transport: 'streamable-http', url: bsl.mcpUrl };
+        } else if (bsl.mode === 'stdio') {
+          resolved = await resolveBsl(bsl, { log });
+        } else {
+          const jar = await ensureJar(bsl, { log });
+          const supervisor = await startBslSupervisor({ jar, java: bsl.java, root: bsl.root, port: bsl.port, log });
+          item.supervisor = supervisor;
+          resolved = { transport: 'streamable-http', url: supervisor.url };
+        }
         entry = {
           ...entry,
           transport: resolved.transport,
@@ -202,6 +214,8 @@ export async function apply(ctx, config) {
         };
       } catch (error) {
         item.error = error instanceof Error ? error.message : String(error);
+        await item.supervisor?.stop();
+        item.supervisor = null;
         return { already: false, tools: 0, error: item.error };
       }
     }
@@ -227,8 +241,16 @@ export async function apply(ctx, config) {
     await item.fiber.dispose();
     item.fiber = null;
     item.error = null;
+    // Процесс BSL LS живёт под нашим управлением: гасим его вместе с клиентом.
+    await item.supervisor?.stop();
+    item.supervisor = null;
     return true;
   };
+
+  // Если плагин выгружают, процессы серверов не должны остаться висеть.
+  ctx.effect(() => () => {
+    for (const item of state.values()) item.supervisor?.stop();
+  });
 
   ctx.tools.register(
     textTool(

@@ -11,12 +11,18 @@
 //   DSH_1C_BSL_LS_DOWNLOAD   «0» — запретить скачивание
 //   DSH_1C_BSL_LS_JAVA       java-команда (по умолчанию java)
 //   DSH_1C_BSL_LS_CWD        рабочий каталог сервера (корень исходников)
+//   DSH_1C_BSL_LS_ROOT       корень рабочего пространства (главнее CWD)
+//   DSH_1C_BSL_LS_PORT       порт встроенного веб-сервера (по умолчанию свободный)
+//   DSH_1C_BSL_LS_MODE       hybrid (по умолчанию) или stdio
 //   DSH_1C_BSL_MCP_URL       адрес уже запущенного BSL LS по Streamable HTTP
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, renameSync, statSync } from 'node:fs';
+import { connect, createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
+import { pathToFileURL } from 'node:url';
 
 export const REPO = '1c-syntax/bsl-language-server';
 /** 130 МБ по медленному каналу — запас большой. */
@@ -37,6 +43,9 @@ export function bslSettings(env = process.env) {
     cacheDir: first(env, 'DSH_1C_BSL_LS_CACHE') ?? join(env.DSH_HOME ?? join(homedir(), '.dsh'), 'cache', 'bsl-language-server'),
     java: first(env, 'DSH_1C_BSL_LS_JAVA', 'BSL_LS_JAVA') ?? 'java',
     cwd: first(env, 'DSH_1C_BSL_LS_CWD', 'BSL_LS_CWD') ?? '',
+    root: first(env, 'DSH_1C_BSL_LS_ROOT', 'DSH_1C_BSL_LS_CWD', 'BSL_LS_CWD') ?? process.cwd(),
+    port: first(env, 'DSH_1C_BSL_LS_PORT'),
+    mode: (first(env, 'DSH_1C_BSL_LS_MODE') ?? 'hybrid').toLowerCase(),
     downloadAllowed: download === undefined ? true : !isOff(download),
   };
 }
@@ -173,3 +182,100 @@ export function bslAvailable(settings) {
   if (settings.jar !== undefined || settings.url !== undefined) return true;
   return settings.downloadAllowed;
 }
+
+/** Свободный порт на loopback. */
+export function freePort() {
+  return new Promise((resolvePort, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port: found } = probe.address();
+      probe.close(() => resolvePort(found));
+    });
+  });
+}
+
+/** LSP-сообщение с заголовком Content-Length. */
+export function lspFrame(message) {
+  const body = JSON.stringify(message);
+  return `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+}
+
+/** Ждёт, пока на порту начнёт приниматься TCP. */
+export async function waitForPort(port, { timeoutMs = 180_000, intervalMs = 500 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const connected = await new Promise((resolveConnect) => {
+      const socket = connect({ host: '127.0.0.1', port });
+      const settle = (ok) => {
+        socket.destroy();
+        resolveConnect(ok);
+      };
+      socket.setTimeout(1000);
+      socket.once('connect', () => settle(true));
+      socket.once('timeout', () => settle(false));
+      socket.once('error', () => settle(false));
+    });
+    if (connected) return;
+    if (Date.now() > deadline) throw new Error(`BSL LS не открыл порт ${port} за ${Math.round(timeoutMs / 1000)} с`);
+    await new Promise((done) => setTimeout(done, intervalMs));
+  }
+}
+
+/**
+ * Поднимает BSL LS в гибридном режиме: LSP по stdio объявляет рабочие
+ * пространства (workspace folders), MCP открывается по Streamable HTTP на том
+ * же процессе. Так BSL LS получает корни, которых не умеет передавать
+ * dsh-mcp-client (он не объявляет capability roots).
+ *
+ * @param options.jar путь к jar, options.java команда java, options.root корень
+ * @returns {{url: string, root: string, stop: () => Promise<void>}}
+ */
+export async function startBslSupervisor({ jar, java = 'java', root, port, log = () => {}, timeoutMs = 180_000 }) {
+  const actualPort = port === undefined ? await freePort() : Number(port);
+  log(`запускаю BSL LS: ${java} -jar ${basename(jar)} lsp --mcp --server.port=${actualPort} (root ${root})`);
+
+  const child = spawn(java, ['-jar', jar, 'lsp', '--mcp', `--server.port=${actualPort}`], {
+    cwd: root,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  child.on('error', (error) => log(`BSL LS не запустился: ${error.message}`));
+  child.on('exit', (code, signal) => log(`BSL LS завершился: ${signal ?? code}`));
+  child.stderr.on('data', (chunk) => {
+    const text = String(chunk);
+    if (/ERROR|Exception|WARN.*roots/i.test(text)) log(text.trim().slice(0, 400));
+  });
+
+  const rootUri = pathToFileURL(root).href;
+  child.stdin.write(
+    lspFrame({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        processId: process.pid,
+        rootUri,
+        workspaceFolders: [{ uri: rootUri, name: basename(root) || 'workspace' }],
+        capabilities: {},
+      },
+    }),
+  );
+  child.stdin.write(lspFrame({ jsonrpc: '2.0', method: 'initialized', params: {} }));
+
+  try {
+    await waitForPort(actualPort, { timeoutMs });
+  } catch (error) {
+    child.kill();
+    throw error;
+  }
+
+  return {
+    url: `http://127.0.0.1:${actualPort}/mcp`,
+    root,
+    stop: async () => {
+      child.kill();
+    },
+  };
+}
+
