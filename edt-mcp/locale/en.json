@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "1C:EDT MCP",
+    "description": "Connects the 1C:EDT MCP server so the agent can read and edit configuration code, metadata, forms and applications in a live EDT workspace."
+  }
+}

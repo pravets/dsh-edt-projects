@@ -1,0 +1,25 @@
+# Configuration-only bundle: inserts one @deepseek-ai/dsh-mcp-client row that
+# connects to the EDT MCP server (1C:EDT plugin, Streamable HTTP on :8767).
+#
+# Token-protected server? Uncomment and export EDT_MCP_TOKEN before launching DSH:
+#   headers:
+#     Authorization: !!js '`Bearer ${process.env.EDT_MCP_TOKEN}`'
+- insert:
+    - id: edt-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: edt
+        transport: streamable-http
+        # Must match EDT > Window > Preferences > MCP Server > Server Port.
+        # 8765 is EDT's default but is taken on this machine, so the server runs on 8767.
+        url: http://127.0.0.1:8767/mcp
+        # EDT operations (update_database, run_yaxunit_tests, validate) exceed the
+        # 60 s default; a call that outlives the timeout is cancelled client-side.
+        toolCallTimeoutMs: 900000
+        # EDT is often closed while DSH runs: do not fail activation, keep retrying.
+        failOnStartupError: false
+        reconnect:
+          enabled: true
+          initialDelayMs: 1000
+          maxDelayMs: 30000
+          maxAttempts: 1000
