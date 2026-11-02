@@ -1,0 +1,188 @@
+// Проверка целостности бандла: манифест, патч композиции, локали, иконка.
+// Ничего не устанавливает и не трогает профиль DSH — только читает файлы.
+//
+// Запуск:
+//   node tools/validate-bundle.mjs            обычная проверка
+//   node tools/validate-bundle.mjs --tag v1.0.0   дополнительно сверить версию с тегом
+//
+// Код возврата: 0 — замечаний нет, 1 — есть.
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const bundleDir = join(root, 'edt-mcp');
+
+const problems = [];
+const ok = [];
+const fail = (message) => problems.push(message);
+const pass = (message) => ok.push(message);
+
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch (err) {
+    fail(`${file}: не разбирается как JSON — ${err.message}`);
+    return null;
+  }
+}
+
+// Разворачивает запись из "files" (поддерживает простой "*" в имени файла).
+function expand(pattern) {
+  if (!pattern.includes('*')) return existsSync(join(bundleDir, pattern)) ? [pattern] : [];
+  const slash = pattern.lastIndexOf('/');
+  const dir = slash === -1 ? '' : pattern.slice(0, slash);
+  const mask = pattern.slice(slash + 1);
+  const re = new RegExp(`^${mask.split('*').map((s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+  let entries;
+  try {
+    entries = readdirSync(join(bundleDir, dir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isFile() && re.test(e.name)).map((e) => (dir ? `${dir}/${e.name}` : e.name));
+}
+
+// --- манифест бандла -------------------------------------------------------
+const manifestPath = join(bundleDir, 'package.json');
+const manifest = readJson(manifestPath);
+let patchPath = null;
+
+if (manifest) {
+  if (!manifest.name) fail('package.json: не задано name');
+  if (!manifest.version) fail('package.json: не задано version');
+  else if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(manifest.version)) fail(`package.json: version от 1.0.0, получено ${manifest.version}`);
+  else pass(`версия ${manifest.version}`);
+
+  const declared = manifest.dsh?.bundle?.patch;
+  if (!declared) {
+    fail('package.json: нет dsh.bundle.patch — менеджер плагинов не увидит бандл');
+  } else {
+    patchPath = join(bundleDir, declared);
+    if (!existsSync(patchPath)) fail(`package.json: dsh.bundle.patch указывает на ${declared}, файла нет`);
+    else pass(`патч ${declared}`);
+  }
+
+  for (const entry of manifest.files ?? []) {
+    const found = expand(entry);
+    if (found.length === 0) fail(`package.json: files "${entry}" не соответствует ни одному файлу`);
+  }
+  const listed = (manifest.files ?? []).flatMap(expand);
+  if (listed.length > 0) pass(`files: ${listed.length} шт.`);
+
+  // Всё, что объявлено в files, должно попасть в tarball; экспорт иконки/локалей — тоже.
+  for (const [key, value] of Object.entries(manifest.exports ?? {})) {
+    const target = String(value).replace('./', '');
+    const found = expand(target);
+    if (found.length === 0) fail(`package.json: exports["${key}"] указывает на ${value}, файлов нет`);
+  }
+}
+
+// --- патч композиции -------------------------------------------------------
+if (patchPath && existsSync(patchPath)) {
+  let rows;
+  try {
+    rows = parseYaml(readFileSync(patchPath, 'utf8'));
+  } catch (err) {
+    fail(`cordis.patch.yml: не разбирается как YAML — ${err.message}`);
+  }
+
+  if (rows !== undefined) {
+    if (!Array.isArray(rows) || rows.length === 0) fail('cordis.patch.yml: ожидался непустой список строк композиции');
+    else {
+      let inserted = 0;
+      rows.forEach((row, i) => {
+        if (!row || typeof row !== 'object' || !Array.isArray(row.insert)) {
+          fail(`cordis.patch.yml: строка ${i + 1} — ожидался объект с полем insert`);
+          return;
+        }
+        row.insert.forEach((item, j) => {
+          const at = `cordis.patch.yml: insert[${j}]`;
+          if (!item || typeof item !== 'object') return fail(`${at} — не объект`);
+          if (!item.id) fail(`${at} — нет id`);
+          if (!item.name) fail(`${at} — нет name (имя плагина)`);
+          const config = item.config;
+          if (!config || typeof config !== 'object') return fail(`${at} — нет config`);
+          if (config.transport === 'stdio') {
+            if (!config.command) fail(`${at}: transport=stdio требует command`);
+          } else {
+            if (!config.serverName) fail(`${at}: нет config.serverName — под ним появятся mcp__<serverName>__*`);
+            if (!config.url) fail(`${at}: нет config.url`);
+            else {
+              try {
+                const url = new URL(config.url);
+                if (!['http:', 'https:'].includes(url.protocol)) fail(`${at}: url ${config.url} — ожидался http(s)`);
+              } catch {
+                fail(`${at}: url ${config.url} не является URL`);
+              }
+            }
+          }
+          inserted += 1;
+        });
+      });
+      if (inserted > 0) pass(`патч: ${inserted} вставка(и)`);
+    }
+  }
+}
+
+// --- локали ----------------------------------------------------------------
+const flatten = (value, prefix = '') =>
+  Object.entries(value ?? {}).flatMap(([k, v]) => {
+    const key = prefix ? `${prefix}.${k}` : k;
+    return v && typeof v === 'object' && !Array.isArray(v) ? flatten(v, key) : [key];
+  });
+
+const locales = join(bundleDir, 'locale');
+if (!existsSync(locales)) {
+  fail('locale/: каталога нет');
+} else {
+  const langFiles = readdirSync(locales).filter((f) => f.endsWith('.json'));
+  if (!langFiles.includes('en.json')) fail('locale/: нет en.json (базовый язык)');
+  const sets = new Map();
+  for (const file of langFiles) {
+    const data = readJson(join(locales, file));
+    if (data) sets.set(file, new Set(flatten(data)));
+  }
+  const base = sets.get('en.json');
+  for (const [file, keys] of sets) {
+    if (file === 'en.json' || !base) continue;
+    const missing = [...base].filter((k) => !keys.has(k));
+    const extra = [...keys].filter((k) => !base.has(k));
+    if (missing.length) fail(`locale/${file}: нет ключей из en.json — ${missing.join(', ')}`);
+    if (extra.length) fail(`locale/${file}: лишние ключи — ${extra.join(', ')}`);
+    if (!missing.length && !extra.length) pass(`locale/${file}: ключи совпадают с en.json`);
+  }
+}
+
+// --- иконка ----------------------------------------------------------------
+const iconPath = join(bundleDir, 'icon.svg');
+if (!existsSync(iconPath)) {
+  fail('icon.svg: файла нет');
+} else {
+  const svg = readFileSync(iconPath, 'utf8');
+  if (!svg.trimStart().startsWith('<svg')) fail('icon.svg: файл не начинается с <svg');
+  if (!/viewBox\s*=/.test(svg)) fail('icon.svg: нет viewBox — иконка будет масштабироваться непредсказуемо');
+  if (!svg.trimEnd().endsWith('</svg>')) fail('icon.svg: нет закрывающего </svg>');
+  if (!problems.some((p) => p.startsWith('icon.svg'))) pass('icon.svg: корректна');
+}
+
+// --- сверка с тегом --------------------------------------------------------
+const tagIndex = process.argv.indexOf('--tag');
+if (tagIndex !== -1) {
+  const tag = process.argv[tagIndex + 1];
+  const expected = String(tag ?? '').replace(/^v/, '');
+  if (!expected) fail('--tag: не передано значение');
+  else if (manifest && expected !== manifest.version) fail(`тег ${tag} не совпадает с версией ${manifest.version}`);
+  else pass(`тег ${tag} совпадает с версией`);
+}
+
+// --- отчёт -----------------------------------------------------------------
+for (const line of ok) console.log(`  ok   ${line}`);
+for (const line of problems) console.error(`  FAIL ${line}`);
+
+if (problems.length) {
+  console.error(`\nПроверка бандла: ${problems.length} замечание(й).`);
+  process.exit(1);
+}
+console.log(`\nПроверка бандла: без замечаний (${ok.length} проверок).`);

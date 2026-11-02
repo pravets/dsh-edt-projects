@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Зависимости
+        run: npm ci
+
+      - name: Проверка бандла (манифест, патч, локали, иконка)
+        run: npm run validate
+
+      - name: Состав tarball
+        run: npm run pack:check
+
+      - name: Синтаксис скриптов
+        run: |
+          node --check tools/validate-bundle.mjs
+          node --check tools/check-edt-mcp.mjs

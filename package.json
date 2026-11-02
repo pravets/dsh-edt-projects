@@ -1,0 +1,24 @@
+{
+  "name": "dsh-edt-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek Harness bundle that connects the 1C:EDT MCP server",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "edt-mcp"
+  ],
+  "scripts": {
+    "validate": "node tools/validate-bundle.mjs",
+    "validate:tag": "node tools/validate-bundle.mjs --tag",
+    "check:edt": "node tools/check-edt-mcp.mjs",
+    "pack:check": "npm pack --workspace edt-mcp --dry-run --cache .npm-cache"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.2.0",
+    "yaml": "^2.8.1"
+  }
+}

@@ -1,0 +1,47 @@
+name: Release
+
+# Тег v1.0.0 -> проверка, что версия в edt-mcp/package.json совпадает,
+# сборка tarball и прикрепление его к GitHub Release.
+# Установка потом: plugin_manager install_bundle с URL этого .tgz.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег релиза, например v1.0.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Зависимости
+        run: npm ci
+
+      - name: Сверка тега с версией бандла
+        run: npm run validate:tag -- "$RELEASE_TAG"
+
+      - name: Сборка tarball
+        run: |
+          mkdir -p dist
+          npm pack --workspace edt-mcp --pack-destination dist --cache .npm-cache
+
+      - name: Публикация релиза
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: dist/*.tgz
+          generate_release_notes: true
