@@ -37,6 +37,26 @@ test('всё настроенное и смонтированное — без �
   assert.doesNotMatch(text, /Подключены по требованию/);
 });
 
+test('правки 1С идут через EDT, с процедурой эскалации', () => {
+  const text = buildRulesText({}, [server('edt')]);
+  assert.match(text, /Правки конфигурации — только через EDT/);
+  assert.match(text, /write_module_source/);
+  assert.match(text, /create_metadata/);
+  assert.match(text, /https:\/\/github\.com\/DitriXNew\/EDT-MCP\/issues/);
+  assert.match(text, /явному разрешению пользователя/);
+});
+
+test('без edt правила правок нет', () => {
+  const text = buildRulesText({}, []);
+  assert.doesNotMatch(text, /write_module_source/);
+  assert.doesNotMatch(text, /EDT-MCP\/issues/);
+});
+
+test('правило правок действует и при недоступном edt: оно про конфигурацию, а не про связь', () => {
+  const text = buildRulesText({ EDT_MCP_URL: 'http://127.0.0.1:8767/mcp' }, []);
+  assert.match(text, /Правки конфигурации — только через EDT/);
+});
+
 test('normalizeServers отбрасывает disabled и выводит транспорт', () => {
   const entries = normalizeServers({
     edt: { url: 'http://127.0.0.1:8767/mcp' },

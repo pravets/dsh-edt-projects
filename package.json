@@ -1,6 +1,6 @@
 {
   "name": "dsh-edt-plugin",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness bundle: MCP hub for 1C development with on-demand servers",

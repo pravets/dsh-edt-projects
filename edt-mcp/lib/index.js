@@ -43,7 +43,24 @@ const EDT_RULES = `
 
 - Проект, объекты, метаданные и поиск по коду: \`list_projects\` → \`get_metadata_details\` / \`search_in_code\` / \`get_module_structure\`.
 - Замечания штатного контроля EDT — \`get_project_errors\`. Это проверка всего проекта и она медленнее точечных инструментов, поэтому для одного файла сначала смотри диагностику в BSL LS.
-- Файлы и модули правь инструментами EDT, а не только текстовым редактором: иначе модель EDT останется устаревшей.`;
+- Правки исходников — по правилам раздела «Правки конфигурации» выше.`;
+
+const EDT_EDIT_RULES = `
+### Правки конфигурации — только через EDT
+
+Любую правку исходников 1С делай инструментами \`edt__*\`, а не файловыми (\`edit\`, \`write\`, \`pwsh\`): EDT держит модель проекта, и правка мимо него её рассинхронизирует.
+
+- Модули: \`write_module_source\` (режимы replace / searchReplace / append / replaceMethod / insertBefore / insertAfter).
+- Объекты и реквизиты: \`create_metadata\`, \`modify_metadata\`, \`rename_metadata_object\`, \`delete_metadata\`, \`adopt_metadata_object\`.
+- Формы, СКД и динамические списки: \`create_metadata\` + \`modify_metadata\`, \`dcs\`.
+- Макеты: \`modify_metadata\` с параметром \`template\`.
+- Исправления по замечаниям контроля: \`apply_quick_fix\`.
+
+Если подходящего инструмента EDT нет:
+
+1. Не обходи ограничение молча. Остановись и скажи пользователю, какая операция нужна, что уже пробовал в EDT и чего не хватило.
+2. Предложи оформить issue: https://github.com/DitriXNew/EDT-MCP/issues — с версией сервера (\`get_edt_version\`), именем нужного инструмента и примером задачи.
+3. Править файл напрямую (\`edit\`/\`write\`) можно только по явному разрешению пользователя на этот конкретный случай; после такой правки предупреди, что модель EDT устарела, и предложи \`revalidate_objects\` или \`resync_to_disk\`.`;
 
 const BSL_RULES = `
 ### BSL Language Server (\`bsl__*\`)
@@ -70,7 +87,10 @@ export function buildRulesText(env = process.env, servers = []) {
   const byEnv = servers.length === 0;
   const blocks = [HEADER];
 
-  if (usable.has('edt') || (byEnv && env.EDT_MCP_URL !== undefined)) blocks.push(EDT_RULES);
+  const edtUsable = usable.has('edt') || (byEnv && env.EDT_MCP_URL !== undefined);
+  if (edtUsable) {
+    blocks.push(EDT_EDIT_RULES, EDT_RULES);
+  }
   if (usable.has('bsl') || (byEnv && (env.BSL_LS_JAR || env.BSL_MCP_URL))) blocks.push(BSL_RULES);
   if (usable.has('tasks') || (byEnv && env.TASKS_MCP_URL)) blocks.push(TASKS_RULES);
 
