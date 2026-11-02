@@ -1,19 +1,29 @@
 // Smoke-тест бандла: одноразовый профиль DSH, установка бандла из tarball,
-// проверка композиции и живой MCP-сессии с заглушкой на порту из патча.
+// проверка композиции и живой MCP-сессии с заглушкой.
 //
 // Запуск:
 //   node tools/smoke-bundle.mjs
 // Переменные:
-//   DSH_BIN   путь к @deepseek-ai/dsh/lib/bin.js (иначе ищется в node_modules)
+//   DSH_BIN       путь к @deepseek-ai/dsh/lib/bin.js (иначе ищется в node_modules)
+//   SMOKE_PORT    занять другой порт вместо порта из патча (локально, если он занят)
+//   EDT_MCP_URL   адрес заглушки; по умолчанию берётся из патча
 //   SMOKE_KEEP=1  не удалять временный DSH_HOME (для разбора)
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
+import YAML from 'yaml';
 
 import { startStubServer } from './stub-mcp-server.mjs';
+
+// `yaml` подключается как CommonJS, поэтому берём его default-экспорт.
+const { parse: parseYaml } = YAML;
+
+// `!!js 'выражение'` до разбора заменяется на объект {js: "..."}: публичного
+// конструктора кастомного тега в yaml 2.9 нет.
+const JS_TAG = /!!js\s+'((?:[^'\\]|\\.)*)'/g;
+const parsePatch = (text) => parseYaml(text.replace(JS_TAG, (_, expr) => JSON.stringify({ js: expr })));
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const patchFile = join(root, 'edt-mcp', 'cordis.patch.yml');
@@ -52,10 +62,10 @@ function run(args, { env, allowFailure = false, label } = {}) {
   return res;
 }
 
-// Конфигурация строки плагина берётся из самого патча: тест проверяет то,
+// Настройки строки плагина берутся из самого патча: тест проверяет то,
 // что реально уезжает в профиль, а не отдельную копию настроек.
 function readPatchRow() {
-  const rows = parseYaml(readFileSync(patchFile, 'utf8'));
+  const rows = parsePatch(readFileSync(patchFile, 'utf8'));
   for (const row of rows ?? []) {
     for (const item of row?.insert ?? []) {
       if (String(item?.name ?? '').includes('mcp-client')) return item;
@@ -64,25 +74,15 @@ function readPatchRow() {
   throw new Error('в cordis.patch.yml нет строки dsh-mcp-client');
 }
 
-// В CI порт из патча свободен. Если он занят (например, настоящим MCP-сервером
-// EDT на рабочей машине), SMOKE_PORT переносит установленную копию на другой порт.
-function rewriteInstalledUrl(home, from, to) {
-  const manifest = JSON.parse(readFileSync(join(root, 'edt-mcp', 'package.json'), 'utf8'));
-  const installed = join(home, 'profiles', 'headless', 'node_modules', ...manifest.name.split('/'), 'cordis.patch.yml');
-  if (!existsSync(installed)) throw new Error(`в профиле нет установленного патча: ${installed}`);
-  const text = readFileSync(installed, 'utf8');
-  if (!text.includes(from)) throw new Error(`в установленном патче нет ${from}`);
-  const written = text.replaceAll(from, to);
-  writeFileSync(installed, written);
-  console.log(`  порт из патча занят, установленная копия переведена на ${to}`);
-  return to;
-}
-
 function findTarball() {
   const dist = join(root, 'dist');
   if (!existsSync(dist)) throw new Error('нет dist/ — сначала соберите tarball (npm pack --workspace edt-mcp --pack-destination dist)');
-  const tgz = readdirSync(dist).filter((f) => f.endsWith('.tgz'));
-  if (tgz.length !== 1) throw new Error(`в dist/ ожидался один .tgz, найдено: ${tgz.length}`);
+  const { version } = JSON.parse(readFileSync(join(root, 'edt-mcp', 'package.json'), 'utf8'));
+  const tgz = readdirSync(dist).filter((f) => f.endsWith(`-${version}.tgz`));
+  if (tgz.length !== 1) {
+    const seen = readdirSync(dist).filter((f) => f.endsWith('.tgz')).join(', ') || 'ничего';
+    throw new Error(`в dist/ ожидался один tarball версии ${version}, найдено: ${seen}`);
+  }
   return join(dist, tgz[0]);
 }
 
@@ -92,13 +92,21 @@ async function main() {
 
   const row = readPatchRow();
   const tarball = findTarball();
-  console.log(`патч: сервер ${row.config.serverName}, ${row.config.transport}, ${row.config.url}`);
+
+  // В CI порт из патча свободен, поэтому тестируется штатный путь без переопределений.
+  // Локально рядом может работать настоящий сервер EDT — тогда SMOKE_PORT/EDT_MCP_URL.
+  const port = process.env.SMOKE_PORT ?? '8767';
+  const override = process.env.EDT_MCP_URL ?? (process.env.SMOKE_PORT ? `http://127.0.0.1:${port}/mcp` : null);
+  const targetUrl = override ?? `http://127.0.0.1:${port}/mcp`;
+  const url = new URL(targetUrl);
+
   console.log(`tarball: ${tarball}`);
+  console.log(`строка сервера: ${row.config.serverName}, ожидаемый адрес ${targetUrl}${override ? ' (переопределён)' : ''}`);
 
   const home = join(root, '.smoke', 'run');
   rmSync(home, { recursive: true, force: true });
   mkdirSync(home, { recursive: true });
-  const env = { DSH_HOME: home };
+  const env = { DSH_HOME: home, ...(override ? { EDT_MCP_URL: override } : {}) };
 
   // 1. Профиль headless создаётся самим CLI из шаблона.
   console.log('\n[1/4] создаю профиль headless');
@@ -108,24 +116,21 @@ async function main() {
   console.log('[2/4] устанавливаю бандл из tarball');
   run(['plugin', '--profile', 'headless', 'add', tarball], { env, label: 'dsh plugin add' });
 
-  let activeUrl = row.config.url;
-  if (process.env.SMOKE_PORT) {
-    const moved = new URL(activeUrl);
-    moved.port = process.env.SMOKE_PORT;
-    activeUrl = rewriteInstalledUrl(home, activeUrl, moved.href.replace(/\/$/, ''));
-  }
-  const url = new URL(activeUrl);
-
-  // 3. Композиция профиля: строка плагина должна попасть в дерево с нашими настройками.
+  // 3. Композиция профиля: строка плагина правил и строка сервера должны быть в дереве.
   console.log('[3/4] проверяю композицию профиля');
   const dump = run(['--profile', 'headless', '--dump-config'], { env, label: 'dsh --dump-config' });
   const composed = `${dump.stdout}${dump.stderr}`;
   if (!/edt[-_]mcp/.test(composed)) fail('в композиции профиля нет строки edt-mcp');
+  if (!composed.includes('mcp-rules')) fail('в композиции нет плагина правил mcp-rules');
   if (!composed.includes(row.config.serverName)) fail(`в композиции нет serverName ${row.config.serverName}`);
-  if (!composed.includes(activeUrl)) fail(`в композиции нет url ${activeUrl}`);
-  if (!process.exitCode) console.log('  ok   строка плагина и её настройки в композиции');
+  // Значение url приходит из !!js-выражения: загрузчик может напечатать как
+  // вычисленный адрес, так и само выражение — принимаем оба варианта.
+  if (!composed.includes(targetUrl) && !composed.includes('process.env.EDT_MCP_URL')) {
+    fail(`в композиции нет ни ${targetUrl}, ни выражения EDT_MCP_URL`);
+  }
+  if (!process.exitCode) console.log('  ok   правила и строка сервера попали в композицию');
 
-  // 4. Живая сессия: заглушка на порту из патча должна получить initialize и tools/list.
+  // 4. Живая сессия: заглушка должна получить initialize и tools/list.
   console.log(`[4/4] поднимаю заглушку на ${url.port} и стартую DSH`);
   const stub = await startStubServer({ port: Number(url.port), host: url.hostname });
 

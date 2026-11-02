@@ -3,13 +3,23 @@
 //
 // Запуск:
 //   node tools/validate-bundle.mjs            обычная проверка
-//   node tools/validate-bundle.mjs --tag v1.0.0   дополнительно сверить версию с тегом
+//   node tools/validate-bundle.mjs --tag v2.0.0   дополнительно сверить версию с тегом
 //
 // Код возврата: 0 — замечаний нет, 1 — есть.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
+import YAML from 'yaml';
+
+// `yaml` подключается как CommonJS, поэтому берём его default-экспорт.
+const { parse: parseYaml } = YAML;
+
+// Патч использует тег `!!js` (выражение загрузчика DSH), а в yaml 2.9 нет
+// публичного конструктора кастомного тега. Поэтому до разбора подменяем
+// `!!js 'выражение'` на обычный объект {js: "выражение"}.
+const JS_TAG = /!!js\s+'((?:[^'\\]|\\.)*)'/g;
+const isExpression = (value) => typeof value === 'object' && value !== null && typeof value.js === 'string';
+const parsePatch = (text) => parseYaml(text.replace(JS_TAG, (_, expr) => JSON.stringify({ js: expr })));
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const bundleDir = join(root, 'edt-mcp');
@@ -64,9 +74,16 @@ if (manifest) {
     else pass(`патч ${declared}`);
   }
 
-  for (const entry of manifest.files ?? []) {
-    const found = expand(entry);
-    if (found.length === 0) fail(`package.json: files "${entry}" не соответствует ни одному файлу`);
+  // Код бандла (правила для модели) должен существовать: строка mcp-rules
+  // в патче ссылается на сам пакет.
+  const entry = manifest.main ?? (typeof manifest.exports?.['.'] === 'string' ? manifest.exports['.'] : null);
+  if (!entry) fail('package.json: нет main/exports["."] — строке mcp-rules нечего загружать');
+  else if (!existsSync(join(bundleDir, entry))) fail(`package.json: точка входа ${entry} не существует`);
+  else pass(`точка входа ${entry}`);
+
+  for (const entryPath of manifest.files ?? []) {
+    const found = expand(entryPath);
+    if (found.length === 0) fail(`package.json: files "${entryPath}" не соответствует ни одному файлу`);
   }
   const listed = (manifest.files ?? []).flatMap(expand);
   if (listed.length > 0) pass(`files: ${listed.length} шт.`);
@@ -83,7 +100,7 @@ if (manifest) {
 if (patchPath && existsSync(patchPath)) {
   let rows;
   try {
-    rows = parseYaml(readFileSync(patchPath, 'utf8'));
+    rows = parsePatch(readFileSync(patchPath, 'utf8'));
   } catch (err) {
     fail(`cordis.patch.yml: не разбирается как YAML — ${err.message}`);
   }
@@ -91,37 +108,58 @@ if (patchPath && existsSync(patchPath)) {
   if (rows !== undefined) {
     if (!Array.isArray(rows) || rows.length === 0) fail('cordis.patch.yml: ожидался непустой список строк композиции');
     else {
-      let inserted = 0;
+      const inserted = [];
       rows.forEach((row, i) => {
         if (!row || typeof row !== 'object' || !Array.isArray(row.insert)) {
           fail(`cordis.patch.yml: строка ${i + 1} — ожидался объект с полем insert`);
           return;
         }
-        row.insert.forEach((item, j) => {
-          const at = `cordis.patch.yml: insert[${j}]`;
-          if (!item || typeof item !== 'object') return fail(`${at} — не объект`);
-          if (!item.id) fail(`${at} — нет id`);
-          if (!item.name) fail(`${at} — нет name (имя плагина)`);
-          const config = item.config;
-          if (!config || typeof config !== 'object') return fail(`${at} — нет config`);
-          if (config.transport === 'stdio') {
-            if (!config.command) fail(`${at}: transport=stdio требует command`);
-          } else {
-            if (!config.serverName) fail(`${at}: нет config.serverName — под ним появятся mcp__<serverName>__*`);
-            if (!config.url) fail(`${at}: нет config.url`);
-            else {
-              try {
-                const url = new URL(config.url);
-                if (!['http:', 'https:'].includes(url.protocol)) fail(`${at}: url ${config.url} — ожидался http(s)`);
-              } catch {
-                fail(`${at}: url ${config.url} не является URL`);
-              }
+        row.insert.forEach((item) => inserted.push(item));
+      });
+
+      inserted.forEach((item, j) => {
+        const at = `cordis.patch.yml: insert[${j}]`;
+        if (!item || typeof item !== 'object') return fail(`${at} — не объект`);
+        if (!item.id) fail(`${at} — нет id`);
+        if (!item.name) return fail(`${at} — нет name (имя плагина)`);
+        if (item.disabled !== undefined && item.disabled !== true && !isExpression(item.disabled)) {
+          fail(`${at}: disabled должен быть true или !!js-выражением`);
+        }
+        const config = item.config;
+        // Плагин без настроек — норма (например, mcp-rules); клиенту MCP config обязателен.
+        if (config === undefined) {
+          if (String(item.name).includes('mcp-client')) fail(`${at} — нет config`);
+          return;
+        }
+        if (typeof config !== 'object') return fail(`${at} — config не объект`);
+        if (config.transport === 'stdio') {
+          if (!config.command) fail(`${at}: transport=stdio требует command`);
+        } else {
+          if (!config.serverName) fail(`${at}: нет config.serverName — под ним появятся mcp__<serverName>__*`);
+          if (!config.url) fail(`${at}: нет config.url`);
+          else if (isExpression(config.url)) pass(`${at}: url задаётся выражением`);
+          else {
+            try {
+              const url = new URL(config.url);
+              if (!['http:', 'https:'].includes(url.protocol)) fail(`${at}: url ${config.url} — ожидался http(s)`);
+            } catch {
+              fail(`${at}: url ${config.url} не является URL`);
             }
           }
-          inserted += 1;
-        });
+        }
       });
-      if (inserted > 0) pass(`патч: ${inserted} вставка(и)`);
+
+      if (inserted.length > 0) pass(`патч: ${inserted.length} вставка(и)`);
+
+      // Два всегда включённых клиента с одним serverName уронили бы активацию.
+      const always = inserted.filter((item) => item?.config?.serverName && item.disabled === undefined);
+      const seen = new Map();
+      for (const item of always) {
+        const name = item.config.serverName;
+        if (seen.has(name)) fail(`cordis.patch.yml: serverName "${name}" занят двумя строками без disabled`);
+        seen.set(name, true);
+      }
+      if (seen.size === always.length) pass(`serverName уникальны среди всегда включённых строк (${seen.size})`);
     }
   }
 }

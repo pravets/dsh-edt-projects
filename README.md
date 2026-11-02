@@ -2,21 +2,27 @@
 
 [![CI](https://github.com/pravets/dsh-edt-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/pravets/dsh-edt-plugin/actions/workflows/ci.yml)
 
-Бандл для DeepSeek Harness, который подключает MCP-сервер **1C:EDT** ([DitriXNew/EDT-MCP](https://github.com/DitriXNew/EDT-MCP))
-и отдаёт агенту его инструменты как `mcp__edt__<tool>`.
+Бандл для DeepSeek Harness, который подключает к агенту MCP-серверы для работы
+с конфигурацией 1С — **1C:EDT** ([DitriXNew/EDT-MCP](https://github.com/DitriXNew/EDT-MCP)),
+**BSL Language Server** и, при желании, MCP-сервер системы задач — и добавляет
+в системный промпт правила выбора инструментов.
 
-Это «configuration-only» бандл: своего кода нет, только манифест и патч композиции,
-который вставляет уже установленный плагин `@deepseek-ai/dsh-mcp-client`.
+Инструменты приходят как `mcp__edt__*`, `mcp__bsl__*` и `mcp__tasks__*`.
+До версии 2.0.0 бандл был чисто конфигурационным; теперь у него есть небольшой код
+(`lib/index.js`) — плагин `mcp-rules`, который публикует правила для модели сразу
+после секции MCP-серверов.
 
 **Статус:** работает. Сервер `edt-mcp-server` 2.22.1 на `127.0.0.1:8767`, EDT 2026.1.2.2,
 бандл установлен в профиль `web`, инструменты доступны как `mcp__edt__*` (99 штук).
+BSL LS и трекер подключаются окружением, когда заданы их адрес или jar.
 
 ## Состав
 
 ```
 edt-mcp/
-  package.json           манифест бандла (dsh.bundle.patch)
-  cordis.patch.yml       строка @deepseek-ai/dsh-mcp-client + параметры подключения
+  package.json           манифест бандла (dsh.bundle.patch, main)
+  cordis.patch.yml       строки серверов: EDT, BSL LS (stdio/http), задачи
+  lib/index.js           плагин mcp-rules: правила для модели в системный промпт
   locale/en.json         название и описание для карточки плагина
   locale/ru.json
   icon.svg
@@ -25,6 +31,7 @@ tools/
   validate-bundle.mjs    проверка манифеста, патча, локалей и иконки (CI)
   stub-mcp-server.mjs    заглушка MCP-сервера для smoke
   smoke-bundle.mjs       прогон бандла в одноразовом профиле DSH
+  rules.test.mjs         тесты текста правил под разные окружения
 .github/workflows/
   ci.yml                 валидация на push и pull request
   release.yml            tarball бандла в GitHub Release по тегу v*
@@ -93,6 +100,56 @@ plugin_manager {
 Установка меняет профиль (`~/.dsh/profiles/web`) и действует на все сессии профиля.
 Вручную `package.json` профиля и `cordis.patch.yml` не правим — это делает менеджер.
 
+## Серверы и окружение
+
+Строки серверов включаются окружением: переустанавливать бандл не нужно, достаточно
+задать переменные перед запуском DSH.
+
+| Переменная | Что включает | По умолчанию |
+|---|---|---|
+| `EDT_MCP_URL` | MCP-сервер EDT (`mcp__edt__*`) | `http://127.0.0.1:8767/mcp`, всегда включён |
+| `EDT_MCP_TOKEN` | заголовок `Authorization: Bearer` для EDT | не задан |
+| `BSL_LS_JAR` | BSL Language Server по **stdio** (`mcp__bsl__*`): DSH сам запускает `java -jar … mcp` | не задан |
+| `BSL_LS_JAVA`, `BSL_LS_CWD` | java-исполняемый файл и рабочий каталог для stdio | `java`, текущий каталог |
+| `BSL_MCP_URL` | BSL LS по **Streamable HTTP**, если сервер уже запущен (`lsp --mcp`) | не задан |
+| `TASKS_MCP_URL` | MCP-сервер системы задач (`mcp__tasks__*`) | не задан |
+| `TASKS_MCP_TOKEN` | заголовок `Authorization: Bearer` для трекера | не задан |
+
+Правила включения живут в `cordis.patch.yml` как `disabled: !!js '…'`:
+
+- BSL LS по stdio включается, когда задан `BSL_LS_JAR`;
+- BSL LS по HTTP включается, когда задан `BSL_MCP_URL` и **не** задан `BSL_LS_JAR`
+  (иначе два клиента заняли бы одно имя `bsl`);
+- система задач включается, когда задан `TASKS_MCP_URL`.
+
+Про BSL Language Server: его режим MCP помечен как экспериментальный, а рабочие
+пространства он получает через MCP roots — `dsh-mcp-client` roots не отправляет.
+Поэтому межфайловые вещи (`find_references` по всему проекту) ограничены; для
+корректных границ конфигурации задайте `BSL_LS_CWD` в корне исходников или
+запускайте LS с конфигурационным файлом, где указан `configurationRoot`.
+
+## Правила для модели
+
+Плагин `mcp-rules` добавляет в системный промпт одну секцию (`order` на единицу
+больше `MCP_SERVERS`) с правилами выбора инструментов:
+
+- структуру и метаданные искать через `edt__*`, а не файловым поиском; `grep` и
+  чтение файлов — запасной путь;
+- точечную диагностику файла брать у `bsl__analyze_file`, а не у `get_project_errors`
+  (это проверка всего проекта и она медленнее);
+- типы и глобальные члены платформы сверять через `bsl__type_info` /
+  `bsl__global_member_info`, а не по памяти;
+- менять состояние проекта (`update_database`, `apply_quick_fix`, удаление,
+  переименование) только по явной просьбе пользователя;
+- ошибку MCP-инструмента называть, а не подменять догадкой.
+
+Текст собирается на старте: если BSL LS или трекер не включены, про них в промпте
+ничего нет. Часть правил сервер может отдавать сам — `dsh-mcp-client` публикует
+`instructions` из `initialize` отдельной секцией `mcp:<serverName>`.
+
+Командные конвенции стоит держать в `AGENTS.md` проекта: он подхватывается
+штатным загрузчиком инструкций DSH и дополняет эти правила.
+
 ## Проверка после установки
 
 В списке инструментов появляется `mcp__edt__*`. Быстрая проверка:
@@ -107,7 +164,7 @@ plugin_manager {
 
 | Что | Где | Зачем |
 |---|---|---|
-| `url` | `cordis.patch.yml` | Порт/хост MCP-сервера EDT |
+| `url` | `cordis.patch.yml` | Порт/хост MCP-сервера EDT; переопределяется `EDT_MCP_URL` |
 | `toolCallTimeoutMs` | там же, сейчас 900000 | `update_database`, `run_yaxunit_tests`, валидация идут дольше 60 с по умолчанию |
 | `failOnStartupError` | там же, `false` | DSH можно запускать при закрытом EDT — плагин дождётся сервера |
 | `reconnect.maxAttempts` | там же, 1000 | Ретраи с backoff до 30 с, пока EDT не поднимется |
@@ -125,7 +182,8 @@ plugin_manager {
 
 ```
 npm install          # yaml + @modelcontextprotocol/client для проверок
-npm run validate     # манифест, YAML-патч, паритет локалей en/ru, иконка
+npm run validate     # манифест, YAML-патч, локали, иконка, конфликты serverName
+npm test             # текст правил под разные наборы включённых серверов
 npm run pack:check   # что попадёт в tarball бандла
 npm run check:edt    # живая проверка MCP-сервера EDT
 npm run smoke        # полный прогон бандла в одноразовом профиле DSH

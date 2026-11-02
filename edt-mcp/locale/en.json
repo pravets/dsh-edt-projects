@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "1C:EDT MCP",
-    "description": "Connects the 1C:EDT MCP server so the agent can read and edit configuration code, metadata, forms and applications in a live EDT workspace."
+    "title": "1C:EDT + BSL MCP",
+    "description": "Connects MCP servers for 1C development: EDT (project, metadata, code editing), BSL Language Server (diagnostics, types, navigation) and a task tracker when its URL is set. Adds tool-selection rules to the prompt."
   }
 }
