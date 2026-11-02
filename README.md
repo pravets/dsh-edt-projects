@@ -61,12 +61,26 @@ plugin_manager { action: "install_bundle", target: "C:\\git\\dsh-edt-plugin\\edt
 ### Из релизного tarball
 
 Начиная с тега `v1.0.0` workflow `release.yml` собирает `edt-mcp` в `.tgz` и прикрепляет
-его к GitHub Release, поэтому ставить можно без клонирования репозитория:
+его к GitHub Release. Для **публичного** репозитория бандл ставится прямо по URL:
 
 ```
 plugin_manager {
   action: "install_bundle",
   target: "https://github.com/pravets/dsh-edt-plugin/releases/download/v1.0.0/local-dsh-edt-mcp-1.0.0.tgz"
+}
+```
+
+Репозиторий закрытый, поэтому анонимный запрос к этому URL отвечает `404` —
+скачайте ассет с токеном и поставьте локальным путём:
+
+```
+gh release download v1.0.0 --pattern '*.tgz' -D dist
+```
+
+```
+plugin_manager {
+  action: "install_bundle",
+  target: "C:\\git\\dsh-edt-plugin\\dist\\local-dsh-edt-mcp-1.0.0.tgz"
 }
 ```
 
