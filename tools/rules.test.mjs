@@ -70,6 +70,39 @@ test('вики: без входной точки подсказка ведёт �
   assert.match(text, /AGENTS\.md/);
 });
 
+test('тесты: YAxUnit включает блок и называет проект тестов', () => {
+  const text = buildRulesText({}, [server('edt')], [], {
+    yaxunit: { enabled: true, path: 'tests/yaxunit', project: 'cfe_yaxunit' },
+  });
+  assert.match(text, /### Тестируемость \(YAxUnit\)/);
+  assert.match(text, /tests\/yaxunit/);
+  assert.match(text, /cfe_yaxunit/);
+  assert.doesNotMatch(text, /### Сценарные тесты/);
+});
+
+test('тесты: Vanessa включает блок про сценарии', () => {
+  const text = buildRulesText({}, [server('edt')], [], { vanessa: { enabled: true, path: 'features' } });
+  assert.match(text, /### Сценарные тесты \(Vanessa Automation\)/);
+  assert.match(text, /features/);
+  assert.doesNotMatch(text, /### Тестируемость/);
+});
+
+test('тесты: без флагов блоков нет', () => {
+  const text = buildRulesText({}, [server('edt')], [], { yaxunit: false, vanessa: false });
+  assert.doesNotMatch(text, /### Тестируемость/);
+  assert.doesNotMatch(text, /### Сценарные тесты/);
+});
+
+test('тесты: YAxUnit идёт раньше Vanessa', () => {
+  const text = buildRulesText({}, [server('edt')], [], { yaxunit: true, vanessa: true });
+  assert.ok(text.indexOf('### Тестируемость') < text.indexOf('### Сценарные тесты'));
+});
+
+test('тесты: без project правило не требует конкретного проекта', () => {
+  const text = buildRulesText({}, [server('edt')], [], { yaxunit: true });
+  assert.doesNotMatch(text, /Тесты пиши в проект/);
+});
+
 test('правило правок действует и при недоступном edt: оно про конфигурацию, а не про связь', () => {
   const text = buildRulesText({ EDT_MCP_URL: 'http://127.0.0.1:8767/mcp' }, []);
   assert.match(text, /Правки конфигурации — только через EDT/);

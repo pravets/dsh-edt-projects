@@ -11,8 +11,12 @@
 # $DSH_HOME/dsh-1c.json (пользователь) и <cwd>/.dsh-1c.json (проект):
 #   { "wiki": { "paths": ["C:\\git\\dev-llm-wiki"], "entry": "wiki/index.md" },
 #     "servers": { "edt": { "url": "http://127.0.0.1:8767/mcp" },
-#                  "bsl": { "root": "C:\\git\\trade\\src\\cf" } } }
+#                  "bsl": { "root": "C:\\git\\trade\\src\\cf" } },
+#     "tests": { "yaxunit": { "enabled": true, "path": "tests/yaxunit", "project": "cfe_yaxunit" },
+#                "vanessa": { "enabled": true, "path": "features" } } }
 # После правки файла: mcp_reload (или mcp_pin заново).
+# Флаги tests включают правила тестируемости: YAxUnit — закладывать тестируемость
+# и писать тесты в указанный проект, Vanessa — предлагать сценарные тесты.
 #
 # Переменные окружения (префикс DSH_1C_ — чтобы ни с чем не пересекаться):
 #   EDT_MCP_URL               адрес MCP-сервера EDT (по умолчанию 127.0.0.1:8767)

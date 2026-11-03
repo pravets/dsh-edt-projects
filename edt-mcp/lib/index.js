@@ -26,6 +26,7 @@ import { watch } from 'node:fs';
 import { bslAvailable, bslSettings, ensureJar, resolveBsl, startBslSupervisor } from './bsl.mjs';
 import { projectConfigPath, resolveConfig, userConfigPath } from './config.mjs';
 import { normalizeWiki, targetPathOf, writeDenialReason } from './wiki.mjs';
+import { normalizeTestTooling } from './tests.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -112,12 +113,49 @@ ${entryLine}
 }
 
 /**
- * Текст правил под фактически настроенные серверы, их состояние и вики.
+ * Блок правил YAxUnit: как проектировать решение, чтобы его можно было покрыть
+ * юнит-тестами, и в какой проект писать тесты.
+ */
+function yaxunitRules(settings) {
+  const hints = [];
+  if (settings.path !== undefined) hints.push(`образец: ${settings.path}`);
+  if (settings.project !== undefined) hints.push(`проект тестов: ${settings.project}`);
+  const suffix = hints.length === 0 ? '' : ` (${hints.join(', ')})`;
+  const target =
+    settings.project === undefined
+      ? ''
+      : ` Тесты пиши в проект \`${settings.project}\`.`;
+  return `
+### Тестируемость (YAxUnit)
+
+В проекте используется модуль юнит-тестирования YAxUnit${suffix}. При планировании задач закладывай тестируемость решения.
+
+- Новую логику выноси в отдельные процедуры и функции без побочных эффектов; зависимости передавай параметрами, а не бери из глобального контекста.
+- Обработчики форм, подписки и команды оставляй тонкими: они вызывают тестируемый слой.
+- В плане задачи перечисли конкретные проверяемые случаи (успех, границы, ошибки) и модуль, куда пойдут тесты.${target}
+- Внешние вызовы изолируй через Мокито.`;
+}
+
+/** Блок правил Vanessa: когда юнитов недостаточно, предлагать сценарии. */
+function vanessaRules(settings) {
+  const suffix = settings.path === undefined ? '' : ` (образец: ${settings.path})`;
+  return `
+### Сценарные тесты (Vanessa Automation)
+
+В проекте используется Vanessa Automation${suffix}. Если функциональность нельзя или трудоёмко покрыть юнит-тестами, либо юнитов недостаточно (интеграция, обмен, интерфейс, печатные формы):
+
+- Предложи пользователю 2–3 варианта сценария: что проверяем, шаги, ожидаемый результат, какие данные и настройки нужны.
+- Не создавай сценарии молча: сначала согласуй набор с пользователем, потом реализуй.`;
+}
+
+/**
+ * Текст правил под фактически настроенные серверы, их состояние, вики и тесты.
  * @param env окружение процесса (для тестов передаётся явно).
  * @param servers список записей { name, state }.
  * @param wikiRoots корни вики из normalizeWiki().
+ * @param tests секция tests из настроек (флаги YAxUnit / Vanessa).
  */
-export function buildRulesText(env = process.env, servers = [], wikiRoots = []) {
+export function buildRulesText(env = process.env, servers = [], wikiRoots = [], tests = {}) {
   const usable = new Set(servers.filter((s) => s.state !== 'unavailable').map((s) => s.name));
   const byEnv = servers.length === 0;
   const blocks = [HEADER];
@@ -138,6 +176,10 @@ export function buildRulesText(env = process.env, servers = [], wikiRoots = []) 
   }
 
   if (wikiRoots.length > 0) blocks.push(wikiRules(wikiRoots));
+
+  const testTooling = normalizeTestTooling(tests);
+  if (testTooling.yaxunit.enabled) blocks.push(yaxunitRules(testTooling.yaxunit));
+  if (testTooling.vanessa.enabled) blocks.push(vanessaRules(testTooling.vanessa));
 
   return blocks.join('\n');
 }
@@ -546,7 +588,7 @@ export async function apply(ctx, config) {
         const agent = context?.agent;
         const effective = effectiveFor(agent);
         const { roots } = normalizeWiki(effective.config?.wiki, { cwd: cwdOf(agent) });
-        return buildRulesText(process.env, snapshot(agent), roots);
+        return buildRulesText(process.env, snapshot(agent), roots, effective.config?.tests);
       },
     });
   });
