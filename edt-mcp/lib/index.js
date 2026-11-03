@@ -27,6 +27,8 @@ import { bslAvailable, bslSettings, ensureJar, resolveBsl, startBslSupervisor } 
 import { projectConfigPath, resolveConfig, userConfigPath } from './config.mjs';
 import { normalizeWiki, targetPathOf, writeDenialReason } from './wiki.mjs';
 import { normalizeTestTooling } from './tests.mjs';
+import { initFile, upgradeFile } from './config-file.mjs';
+import { stringifyConfig, validateConfig } from './schema.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -557,6 +559,69 @@ export async function apply(ctx, config) {
         if (changed.length === 0) return { text: 'Настройки перечитаны, изменений в подключённых серверах нет.' };
         const rows = changed.map((item) => `${item.name}: ${item.error === undefined ? 'перезапущен' : `ошибка — ${item.error}`}`);
         return { text: `Настройки перечитаны:\n${rows.join('\n')}` };
+      },
+    ),
+  );
+
+  ctx.tools.register(
+    textTool(
+      'mcp_config',
+      'Inspect or maintain the settings file. action=show prints the effective settings, their sources and validation warnings; init creates the file with defaults (refuses when it exists); upgrade adds only missing keys, keeping your values; validate reports type errors and unknown keys.',
+      {
+        action: {
+          type: 'string',
+          description: 'show | init | upgrade | validate',
+          required: true,
+          enum: ['show', 'init', 'upgrade', 'validate'],
+        },
+        scope: { type: 'string', description: 'project (default) or user ($DSH_HOME/dsh-1c.json).', enum: ['project', 'user'] },
+        dryRun: { type: 'boolean', description: 'For upgrade: only report what would be added (default true).' },
+      },
+      async (args, exec) => {
+        const cwd = cwdOf(exec?.agent);
+        const path = args.scope === 'user' ? userConfigPath(process.env) : projectConfigPath(cwd);
+        if (path === undefined) throw new Error('mcp_config: cannot resolve the settings path');
+
+        if (args.action === 'show') {
+          const effective = effectiveFor(exec?.agent);
+          const { errors, warnings } = validateConfig(effective.config);
+          const head = [
+            `Источники: ${effective.sources.length > 0 ? effective.sources.join(', ') : 'только cordis.patch.yml'}`,
+            `Действующие настройки:\n${stringifyConfig(effective.config)}`,
+          ];
+          if (errors.length > 0) head.push(`Ошибки:\n${errors.map((line) => `  ✗ ${line}`).join('\n')}`);
+          if (warnings.length > 0) head.push(`Предупреждения:\n${warnings.map((line) => `  ! ${line}`).join('\n')}`);
+          return { text: head.join('\n\n') };
+        }
+
+        if (args.action === 'init') {
+          const created = initFile(path);
+          if (created.status === 'exists') return { text: `${path} уже существует — используйте action=upgrade, чтобы дополнить его.` };
+          if (created.status === 'error') throw new Error(`mcp_config init: ${created.error}`);
+          return { text: `Создан ${path} со значениями по умолчанию. Дальше впишите пути вики, корень конфигурации и флаги тестов.` };
+        }
+
+        if (args.action === 'upgrade') {
+          const dryRun = args.dryRun !== false;
+          const result = upgradeFile(path, { dryRun });
+          if (result.status === 'error') throw new Error(`mcp_config upgrade: ${result.error}`);
+          if (result.status === 'noop') return { text: `${path}: актуален, добавлять нечего.` };
+          const lines = [`${path}: ${dryRun ? 'будет добавлено' : 'добавлено'} ${result.added.length} ключ(ей):`];
+          for (const key of result.added) lines.push(`  + ${key}`);
+          if (dryRun) lines.push('Это был предварительный просмотр. Повторите с dryRun: false, чтобы записать.');
+          for (const warning of result.warnings) lines.push(`  ! ${warning}`);
+          for (const error of result.errors) lines.push(`  ✗ ${error}`);
+          return { text: lines.join('\n') };
+        }
+
+        // validate
+        const effective = effectiveFor(exec?.agent);
+        const { errors, warnings } = validateConfig(effective.config);
+        if (errors.length === 0 && warnings.length === 0) return { text: 'Настройки корректны, неизвестных ключей нет.' };
+        const lines = [];
+        for (const error of errors) lines.push(`  ✗ ${error}`);
+        for (const warning of warnings) lines.push(`  ! ${warning}`);
+        return { text: lines.join('\n') };
       },
     ),
   );
