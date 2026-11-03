@@ -24,6 +24,9 @@ edt-mcp/
   cordis.patch.yml       config.servers: EDT, BSL LS (stdio/http), задачи + lazy
   lib/index.js           хаб mcp-hub: монтаж серверов, mcp_servers/pin/unpin, правила
   lib/bsl.mjs            поиск и автозагрузка jar BSL Language Server (sha256)
+  lib/skills.mjs         провайдер навыков из пакета, включение по конфигу
+  skills/edt-mcp-project-sonar/   навык SonarQube (SKILL.md + references)
+  skills/edt-mcp-project-gitlab/  навык GitLab через glab
   locale/en.json         название и описание для карточки плагина
   locale/ru.json
   icon.svg
@@ -225,6 +228,41 @@ node tools/config-init.mjs --print         # напечатать JSON, не з�
 
 Если включены оба, блок YAxUnit идёт первым: он про то, как проектировать, а
 Vanessa — чем дополнить.
+
+## Навыки в бандле
+
+Два навыка поставляются вместе с плагином и появляются в каталоге навыков
+**только когда включены в конфиге** проекта:
+
+```json
+{
+  "sonar":  { "enabled": true, "projectKey": "" },
+  "gitlab": { "enabled": true }
+}
+```
+
+| Флаг | Навык | Когда включать |
+|---|---|---|
+| `sonar.enabled` | `edt-mcp-project-sonar` | в проекте есть SonarQube и нужно разбирать замечания или гейт |
+| `gitlab.enabled` | `edt-mcp-project-gitlab` | работа идёт через `glab`: коммиты, MR, пайплайны |
+
+- Навык Sonar включается также автоматически, если в `servers` появится
+  `sonarqube` (Sonar как MCP-сервер).
+- Без флага навыка в каталоге нет — проект без Sonar и GitLab работает как
+  раньше, никакой обязательной зависимости нет.
+- Навыки приходят из пакета (ранг bundled), поэтому проектный навык с тем же
+  именем в `.agents/skills` переопределяет встроенный.
+
+**Адреса не зашиты.** В текстах навыков нет ни хостов, ни ключей проектов, ни
+id: навык определяет их в момент работы — `sonar auth status` для сервера Sonar,
+`sonar-project.properties` или `sonar.projectKey` для ключа, `git remote -v` и
+`glab api "projects/:fullpath"` для GitLab. Валидатор бандла падает, если в
+поставляемых текстах появится внутренний хост или конкретный ключ.
+
+Внутри навыков — проверенные лестницы: Sonar MCP → локальный `sonar` CLI →
+явный стоп «Sonar не настроен»; для GitLab — `glab` и строка
+`✓ Logged in to <host>`, иначе стоп «GitLab не настроен». Мерж, force-push и
+пуш в основную ветку запрещены текстом навыка.
 
 ## Параллельные агенты и worktree
 

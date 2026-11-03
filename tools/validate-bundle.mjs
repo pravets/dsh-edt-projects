@@ -208,6 +208,58 @@ if (!existsSync(locales)) {
   }
 }
 
+// --- навыки ----------------------------------------------------------------
+// Навыки едут в пакете, поэтому проверяем и их, и запрет реальных адресов:
+// в поставляемых текстах не должно быть конкретных хостов и ключей проектов.
+const FORBIDDEN_TEXT = [
+  { pattern: /[a-z0-9-]+\.internal\b/i, why: 'реальный внутренний хост' },
+  { pattern: /\bgitlab\.[a-z0-9-]+\.[a-z]{2,}\b/i, why: 'реальный хост GitLab' },
+  { pattern: /\bsq\.[a-z0-9-]+\.[a-z]{2,}\b/i, why: 'реальный хост Sonar' },
+  { pattern: /\bprojectKey\s*=\s*(?!<)[a-z0-9_-]{3,}\b/i, why: 'конкретный ключ проекта Sonar' },
+];
+
+function scanForbidden(file) {
+  const text = readFileSync(file, 'utf8');
+  const lines = text.split('\n');
+  lines.forEach((line, index) => {
+    for (const rule of FORBIDDEN_TEXT) {
+      if (rule.pattern.test(line)) fail(`${file}:${index + 1}: ${rule.why} — ${line.trim().slice(0, 80)}`);
+    }
+  });
+}
+
+const skillsDir = join(bundleDir, 'skills');
+if (!existsSync(skillsDir)) {
+  fail('skills/: каталога нет');
+} else {
+  const dirs = readdirSync(skillsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  if (dirs.length === 0) fail('skills/: нет ни одного навыка');
+  for (const dir of dirs) {
+    const file = join(skillsDir, dir.name, 'SKILL.md');
+    if (!existsSync(file)) {
+      fail(`skills/${dir.name}: нет SKILL.md`);
+      continue;
+    }
+    const text = readFileSync(file, 'utf8');
+    const name = /^name:\s*(.+)$/m.exec(text)?.[1]?.trim();
+    if (name === undefined) fail(`skills/${dir.name}/SKILL.md: нет name во frontmatter`);
+    else if (name !== dir.name) fail(`skills/${dir.name}/SKILL.md: name «${name}» не совпадает с каталогом`);
+    if (!/^description:\s*\S+/m.test(text)) fail(`skills/${dir.name}/SKILL.md: пустой description`);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(dir.name)) fail(`skills/${dir.name}: имя не kebab-case`);
+  }
+
+  const walk = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+  for (const file of walk(skillsDir)) scanForbidden(file);
+  if (existsSync(join(root, 'README.md'))) scanForbidden(join(root, 'README.md'));
+
+  const listed = (manifest?.files ?? []).some((entry) => entry === 'skills' || entry.startsWith('skills/'));
+  if (!listed) fail('package.json: skills не указан в files — навыки не попадут в tarball');
+  else pass(`skills: ${dirs.length} навык(а), адреса не зашиты`);
+}
+
 // --- иконка ----------------------------------------------------------------
 const iconPath = join(bundleDir, 'icon.svg');
 if (!existsSync(iconPath)) {

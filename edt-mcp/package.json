@@ -1,16 +1,16 @@
 {
   "name": "@local/dsh-edt-mcp",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "type": "module",
-  "description": "MCP hub for 1C development: EDT always on, BSL Language Server started in LSP+MCP mode with workspace roots, task tracker via mcp_pin, with model-facing usage rules",
+  "description": "MCP hub for 1C development: EDT always on, BSL Language Server started in LSP+MCP mode with workspace roots, task tracker via mcp_pin, bundled SonarQube and GitLab skills, with model-facing usage rules",
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["lib", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "files": ["lib", "skills", "cordis.patch.yml", "locale/*.json", "icon.svg"],
   "dependencies": {
     "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.5"
   },

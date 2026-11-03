@@ -19,7 +19,7 @@ test('init создаёт файл со всеми ключами по умол�
 
   const written = JSON.parse(readFileSync(fileIn(dir), 'utf8'));
   assert.equal(written.version, CONFIG_VERSION);
-  assert.deepEqual(Object.keys(written).sort(), ['servers', 'tests', 'version', 'wiki']);
+  assert.deepEqual(Object.keys(written).sort(), ['gitlab', 'servers', 'sonar', 'tests', 'version', 'wiki']);
   assert.deepEqual(written.wiki.paths, []);
   assert.equal(written.tests.yaxunit.enabled, false);
 });
@@ -150,5 +150,21 @@ test('stringifyConfig: отступ 2 и перевод строки в конц
 
 test('порядок ключей стабилен: известные по схеме, затем прочие', () => {
   const plan = planUpgrade({ zzz: 1, tests: { vanessa: { enabled: true } }, wiki: { paths: ['a'] } });
-  assert.deepEqual(Object.keys(plan.config), ['version', 'wiki', 'servers', 'tests', 'zzz']);
+  assert.deepEqual(Object.keys(plan.config), ['version', 'wiki', 'servers', 'tests', 'sonar', 'gitlab', 'zzz']);
+});
+
+test('sonar и gitlab: ключи в схеме, дефолты выключены, upgrade их добавляет', () => {
+  assert.deepEqual(DEFAULTS.sonar, { enabled: false, projectKey: '' });
+  assert.deepEqual(DEFAULTS.gitlab, { enabled: false });
+  assert.equal(isKnownPath('sonar.enabled'), true);
+  assert.equal(isKnownPath('sonar.projectKey'), true);
+  assert.equal(isKnownPath('gitlab.enabled'), true);
+
+  const plan = planUpgrade({ version: CONFIG_VERSION });
+  assert.ok(plan.added.includes('sonar.enabled'));
+  assert.ok(plan.added.includes('gitlab.enabled'));
+
+  const kept = planUpgrade({ version: CONFIG_VERSION, sonar: { enabled: true, projectKey: 'demo' } });
+  assert.equal(kept.config.sonar.enabled, true);
+  assert.equal(kept.config.sonar.projectKey, 'demo');
 });

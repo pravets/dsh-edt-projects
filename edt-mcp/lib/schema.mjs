@@ -19,6 +19,8 @@ export const DEFAULTS = {
     yaxunit: { enabled: false, path: '', project: '' },
     vanessa: { enabled: false, path: '' },
   },
+  sonar: { enabled: false, projectKey: '' },
+  gitlab: { enabled: false },
 };
 
 /** Известные ключи: путь -> описание и тип. Используются валидацией и README. */
@@ -51,6 +53,9 @@ export const KNOWN = {
   'tests.yaxunit.project': { type: 'string', description: 'EDT-проект, в который писать тесты.' },
   'tests.vanessa.enabled': { type: 'boolean', description: 'Включить правила сценарных тестов Vanessa.' },
   'tests.vanessa.path': { type: 'string', description: 'Каталог сценариев как образец стиля.' },
+  'sonar.enabled': { type: 'boolean', description: 'Включить навык SonarQube.' },
+  'sonar.projectKey': { type: 'string', description: 'Ключ проекта Sonar; пусто — берётся из sonar-project.properties.' },
+  'gitlab.enabled': { type: 'boolean', description: 'Включить навык GitLab (glab).' },
 };
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);

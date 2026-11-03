@@ -29,6 +29,7 @@ import { normalizeWiki, targetPathOf, writeDenialReason } from './wiki.mjs';
 import { normalizeTestTooling } from './tests.mjs';
 import { initFile, upgradeFile } from './config-file.mjs';
 import { stringifyConfig, validateConfig } from './schema.mjs';
+import { createSkillsProvider } from './skills.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -625,6 +626,18 @@ export async function apply(ctx, config) {
       },
     ),
   );
+
+  // --- навыки, поставляемые с бандлом ---
+  // Навык появляется в каталоге только когда включён в конфиге проекта:
+  // list() провайдера возвращает пустой список при выключенном флаге.
+  ctx.inject(['skills'], (inner) => {
+    inner.skills.registerProvider(() =>
+      createSkillsProvider({
+        resolveConfig: (cwd) => resolveConfig({ cwd: cwd ?? process.cwd(), env: process.env, base }).config,
+        logger: ctx.logger,
+      }),
+    );
+  });
 
   // --- наблюдение за файлами настроек ---
   const watchFile = (path) => {
