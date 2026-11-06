@@ -56,7 +56,17 @@ jobs:
       # файла release.yml: токен выдаёт сам npm по OIDC (permissions.id-token).
       # Уже опубликованную версию шаг пропускает, чтобы ручной релиз и push тега
       # не конфликтовали.
+      - name: Диагностика OIDC
+        run: |
+          echo "id-token url:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}"
+          echo "id-token token: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}"
+          echo "npm: $(npm --version)"
+
       - name: Публикация в npm
+        env:
+          # verbose показывает причину, по которой OIDC не сработал:
+          # "oidc Skipped because ..." или "Failed token exchange request with body message: ..."
+          NPM_CONFIG_LOGLEVEL: verbose
         run: |
           version=$(node -p "require('./packages/dsh-edt-projects/package.json').version")
           if npm view "dsh-edt-projects@$version" version >/dev/null 2>&1; then
