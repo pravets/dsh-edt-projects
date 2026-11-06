@@ -52,7 +52,7 @@ jobs:
       - name: Сборка tarball бандла
         run: |
           mkdir -p dist
-          npm pack --workspace edt-mcp --pack-destination dist
+          npm pack --workspace plugin --pack-destination dist
 
       - name: Smoke
         run: npm run smoke

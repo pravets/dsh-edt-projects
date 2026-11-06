@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { findEntry, isInside, normalizeWiki, targetPathOf, writeDenialReason } from '../edt-mcp/lib/wiki.mjs';
+import { findEntry, isInside, normalizeWiki, targetPathOf, writeDenialReason } from '../plugin/lib/wiki.mjs';
 
 const base = join(process.cwd(), '.smoke');
 mkdirSync(base, { recursive: true });

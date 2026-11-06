@@ -11,7 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
-import { DEFAULTS } from '../edt-mcp/lib/schema.mjs';
+import { DEFAULTS } from '../plugin/lib/schema.mjs';
 
 // `yaml` подключается как CommonJS, поэтому берём его default-экспорт.
 const { parse: parseYaml } = YAML;
@@ -24,7 +24,7 @@ const isExpression = (value) => typeof value === 'object' && value !== null && t
 const parsePatch = (text) => parseYaml(text.replace(JS_TAG, (_, expr) => JSON.stringify({ js: expr })));
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const bundleDir = join(root, 'edt-mcp');
+const bundleDir = join(root, 'plugin');
 
 const problems = [];
 const ok = [];
@@ -105,7 +105,7 @@ if (manifest) {
     ['package.json', rootManifest?.version],
     ['package-lock.json:version', lock?.version],
     ['package-lock.json:packages[""]', lock?.packages?.['']?.version],
-    ['package-lock.json:packages["edt-mcp"]', lock?.packages?.['edt-mcp']?.version],
+    ['package-lock.json:packages["plugin"]', lock?.packages?.plugin?.version],
   ].filter(([, version]) => version !== undefined);
   const mismatched = versionSources.filter(([, version]) => version !== manifest.version);
   if (mismatched.length > 0) {

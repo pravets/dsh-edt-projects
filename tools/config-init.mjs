@@ -7,9 +7,9 @@
 //   node tools/config-init.mjs --cwd <dir>    # другой каталог проекта
 import { resolve } from 'node:path';
 
-import { initFile, readExisting, upgradeFile } from '../edt-mcp/lib/config-file.mjs';
-import { projectConfigPath, userConfigPath } from '../edt-mcp/lib/config.mjs';
-import { DEFAULTS, planUpgrade, stringifyConfig, validateConfig } from '../edt-mcp/lib/schema.mjs';
+import { initFile, readExisting, upgradeFile } from '../plugin/lib/config-file.mjs';
+import { projectConfigPath, userConfigPath } from '../plugin/lib/config.mjs';
+import { DEFAULTS, planUpgrade, stringifyConfig, validateConfig } from '../plugin/lib/schema.mjs';
 
 const args = process.argv.slice(2);
 const has = (flag) => args.includes(flag);

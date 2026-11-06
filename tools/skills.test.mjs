@@ -14,10 +14,10 @@ import {
   isSonarEnabled,
   parseFrontmatter,
   skillFile,
-} from '../edt-mcp/lib/skills.mjs';
+} from '../plugin/lib/skills.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const skillsRoot = join(here, '..', 'edt-mcp', 'skills');
+const skillsRoot = join(here, '..', 'plugin', 'skills');
 
 const providerWith = (config) => createSkillsProvider({ resolveConfig: () => config });
 const names = (config) => providerWith(config).list({}).map((skill) => skill.name);

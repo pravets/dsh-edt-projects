@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { bslAvailable, bslSettings, ensureJar, predictAsset, RateLimitError, resolveBsl, resolveReleaseViaHtml, selectExecAsset, startBslSupervisor } from '../edt-mcp/lib/bsl.mjs';
+import { bslAvailable, bslSettings, ensureJar, predictAsset, RateLimitError, resolveBsl, resolveReleaseViaHtml, selectExecAsset, startBslSupervisor } from '../plugin/lib/bsl.mjs';
 
 // Временные каталоги держим внутри рабочего каталога: системный TMP в
 // ограниченном режиме может быть недоступен, а .smoke/ уже в .gitignore.

@@ -41,7 +41,7 @@ jobs:
       - name: Сборка tarball
         run: |
           mkdir -p dist
-          npm pack --workspace edt-mcp --pack-destination dist --cache .npm-cache
+          npm pack --workspace plugin --pack-destination dist --cache .npm-cache
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v3
@@ -63,6 +63,6 @@ jobs:
           elif [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "NPM_TOKEN не задан — публикация пропущена"
           else
-            npm publish --workspace edt-mcp --access public --provenance
+            npm publish --workspace plugin --access public --provenance
           fi
 

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { hasTestTooling, normalizeTestTooling } from '../edt-mcp/lib/tests.mjs';
+import { hasTestTooling, normalizeTestTooling } from '../plugin/lib/tests.mjs';
 
 test('сокращённая форма: true включает, false и отсутствие выключают', () => {
   const on = normalizeTestTooling({ yaxunit: true, vanessa: false });

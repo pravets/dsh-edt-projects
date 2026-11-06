@@ -52,6 +52,9 @@
   `v1.0.0` снят, текущий тег — `v0.9.0`.
 - Пакет и репозиторий переименованы: `dsh-edt-plugin` → `dsh-edt-projects`,
   пакет `@local/dsh-edt-mcp` → `dsh-edt-projects`. Репозиторий стал публичным.
+- Каталог бандла `edt-mcp/` → `plugin/` (workspace, скрипты, workflow-ы и пути
+  в документации); имена навыков `edt-mcp-project-*` и провайдер
+  `edt-mcp-bundle-skills` не менялись — это отдельный неймспейс.
 - Порт EDT по умолчанию — `8765` вместо `8767`, как у самого EDT-MCP; в
   `cordis.patch.yml`, `lib/schema.mjs`, smoke-заглушке и документации. Если порт
   занят, его по-прежнему переопределяет `EDT_MCP_URL`.

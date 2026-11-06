@@ -19,7 +19,7 @@ BSL LS и трекер подключаются окружением и по `mc
 ## Состав
 
 ```
-edt-mcp/
+plugin/
   package.json           манифест бандла (dsh.bundle.patch, main, зависимости)
   cordis.patch.yml       config.servers: EDT, BSL LS (stdio/http), задачи + lazy
   lib/index.js           хаб mcp-hub: монтаж серверов, mcp_servers/pin/unpin, правила
@@ -75,12 +75,12 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 ### Через Web UI (профиль desktop)
 
 Sidebar → **Plugins** → **Add plugin** → вставить абсолютный путь
-`C:\git\dsh-edt-plugin\edt-mcp` → **Install** → **Enable now**.
+`C:\git\dsh-edt-plugin\plugin` → **Install** → **Enable now**.
 
 ### Через инструмент `plugin_manager` из локальных исходников
 
 ```
-plugin_manager { action: "install_bundle", target: "C:\\git\\dsh-edt-plugin\\edt-mcp" }
+plugin_manager { action: "install_bundle", target: "C:\\git\\dsh-edt-plugin\\plugin" }
 ```
 
 Установка по пути (`link:`) удобна при разработке: правки в репозитории видны
@@ -88,7 +88,7 @@ plugin_manager { action: "install_bundle", target: "C:\\git\\dsh-edt-plugin\\edt
 
 ### Из релизного tarball
 
-Начиная с тега `v0.9.0` workflow `release.yml` собирает `edt-mcp` в `.tgz` и прикрепляет
+Начиная с тега `v0.9.0` workflow `release.yml` собирает бандл в `.tgz` и прикрепляет
 его к GitHub Release. Бандл ставится прямо по URL:
 
 ```
@@ -547,7 +547,7 @@ npm run smoke        # полный прогон бандла в однораз�
 Smoke гоняется отдельным workflow по расписанию, вручную и на PR, которые
 трогают бандл — версия DSH закреплена в `env.DSH_VERSION`.
 
-Релиз: поднять `version` в `edt-mcp/package.json`, добавить запись в `CHANGELOG.md`,
+Релиз: поднять `version` в `plugin/package.json`, добавить запись в `CHANGELOG.md`,
 поставить тег `vX.Y.Z` и запушить его — `release.yml` сверит тег с версией и
 опубликует tarball.
 
