@@ -6,7 +6,7 @@
 // где calls — массив имён вызванных методов (для проверок в тесте).
 //
 // Запуск вручную:
-//   node tools/stub-mcp-server.mjs 8767
+//   node tools/stub-mcp-server.mjs 8765
 import { createServer } from 'node:http';
 
 export const STUB_TOOL = 'ping';
@@ -134,7 +134,7 @@ export function startStubServer({ port = 0, host = '127.0.0.1' } = {}) {
 
 // Прямой запуск: node tools/stub-mcp-server.mjs [port]
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
-  const port = Number(process.argv[2] ?? 8767);
+  const port = Number(process.argv[2] ?? 8765);
   const stub = await startStubServer({ port });
   console.log(`заглушка MCP слушает ${stub.url}`);
   const stop = async () => {

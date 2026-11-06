@@ -11,6 +11,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
+import { DEFAULTS } from '../edt-mcp/lib/schema.mjs';
+
 // `yaml` подключается как CommonJS, поэтому берём его default-экспорт.
 const { parse: parseYaml } = YAML;
 
@@ -111,6 +113,15 @@ if (manifest) {
   } else {
     pass(`версии согласованы: ${versionSources.map(([where]) => where).join(', ')} — ${manifest.version}`);
   }
+
+  // npm отклоняет приватный пакет, а без README/LICENSE публикация выходит неполной.
+  if (manifest.private === true) fail('package.json: "private": true — такой пакет npm publish отклонит');
+  else pass('пакет публикуемый (private не задан)');
+  if (manifest.license === undefined) fail('package.json: нет license — пакет уйдёт в npm без лицензии');
+  else pass(`лицензия ${manifest.license}`);
+  const missingDocs = ['README.md', 'LICENSE'].filter((file) => !existsSync(join(bundleDir, file)));
+  if (missingDocs.length > 0) fail(`в каталоге бандла нет ${missingDocs.join(', ')} — npm не включит их в пакет`);
+  else pass('README.md и LICENSE попадут в пакет');
 }
 
 // --- патч композиции -------------------------------------------------------
@@ -181,6 +192,19 @@ if (patchPath && existsSync(patchPath)) {
           if (eager.length === 0) fail(`cordis.patch.yml: ни один сервер не подключается сразу (${names.join(', ')}) — в сессии не будет MCP-инструментов до mcp_pin`);
           else pass(`mcp-hub: ${names.length} сервер(а), сразу: ${eager.join(', ')}${lazy.length ? `, по требованию: ${lazy.join(', ')}` : ''}`);
         }
+      }
+
+      // Порт EDT: значение в патче и в DEFAULTS должно совпадать, иначе
+      // `config upgrade` покажет один адрес, а хаб пойдёт на другой.
+      const urlLine = /^\s*url:\s*(.+)$/m.exec(readFileSync(patchPath, 'utf8'))?.[1] ?? '';
+      const patchPort = /:(\d+)\/mcp/.exec(urlLine)?.[1];
+      const schemaPort = /:(\d+)\/mcp/.exec(DEFAULTS?.servers?.edt?.url ?? '')?.[1];
+      if (patchPort === undefined || schemaPort === undefined) {
+        fail('порт EDT не найден: ожидался http://127.0.0.1:<порт>/mcp в cordis.patch.yml и в DEFAULTS');
+      } else if (patchPort !== schemaPort) {
+        fail(`порт EDT расходится: cordis.patch.yml ${patchPort}, DEFAULTS ${schemaPort}`);
+      } else {
+        pass(`порт EDT по умолчанию ${patchPort}`);
       }
 
       // Два всегда включённых клиента с одним serverName уронили бы активацию.

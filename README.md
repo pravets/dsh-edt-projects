@@ -1,6 +1,6 @@
-# dsh-edt-plugin
+# dsh-edt-projects
 
-[![CI](https://github.com/pravets/dsh-edt-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/pravets/dsh-edt-plugin/actions/workflows/ci.yml)
+[![CI](https://github.com/pravets/dsh-edt-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/pravets/dsh-edt-projects/actions/workflows/ci.yml)
 
 Бандл для DeepSeek Harness: хаб MCP-серверов для работы с конфигурацией 1С —
 **1C:EDT** ([DitriXNew/EDT-MCP](https://github.com/DitriXNew/EDT-MCP)),
@@ -12,8 +12,8 @@ EDT подключён всегда, BSL LS и трекер — по требо�
 и его инструменты появляются в следующем же запросе к модели. Так схемы
 эпизодических серверов не занимают контекст постоянно.
 
-**Статус:** работает. Сервер `edt-mcp-server` 2.22.1 на `127.0.0.1:8767`, EDT 2026.1.2.2,
-бандл установлен в профиль `web`, инструменты доступны как `mcp__edt__*` (99 штук).
+**Статус:** работает. Сервер `edt-mcp-server` на `127.0.0.1:8765`, EDT 2026.2,
+бандл установлен в профиль `desktop`, инструменты доступны как `mcp__edt__*`.
 BSL LS и трекер подключаются окружением и по `mcp_pin`, когда заданы их адрес или jar.
 
 ## Состав
@@ -49,9 +49,10 @@ package.json             рабочее пространство: скрипты
 1. **EDT-MCP установлен в EDT** (2026.1 / 2026.2): Help → Install New Software →
    `https://ditrixnew.github.io/EDT-MCP/` → EDT MCP Server Feature → перезапуск.
 2. **Сервер запущен**: Window → Preferences → MCP Server → Server Port и Start/автостарт.
-   Порт по умолчанию у EDT-MCP — `8765`. На машине, где готовился этот бандл, `8765`
-   занят другим процессом, поэтому сервер поднят на `8767` — этот же порт стоит
-   в `cordis.patch.yml`, и `tools/check-edt-mcp.mjs` берёт адрес оттуда.
+   Порт по умолчанию у EDT-MCP — `8765`, и бандл по умолчанию ходит туда же
+   (`cordis.patch.yml`, `lib/schema.mjs`). Если порт занят или изменён в EDT,
+   задайте `EDT_MCP_URL` — он главнее любого значения по умолчанию, а
+   `tools/check-edt-mcp.mjs` берёт адрес из патча.
 3. **Plain text mode включён** (Preferences → MCP Server → *Plain text mode (Cursor
    compatibility)*). Без него EDT отдаёт результат как embedded resource, а
    `dsh-mcp-client` показывает вместо него заглушку
@@ -62,31 +63,42 @@ package.json             рабочее пространство: скрипты
 
 ## Установка
 
-### Через Web UI (профиль web)
+### Из npm (проще всего)
+
+```
+plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
+```
+
+Пакет публичный, поэтому ничего скачивать вручную не нужно: менеджер плагинов
+возьмёт его из реестра npm.
+
+### Через Web UI (профиль desktop)
 
 Sidebar → **Plugins** → **Add plugin** → вставить абсолютный путь
 `C:\git\dsh-edt-plugin\edt-mcp` → **Install** → **Enable now**.
 
-### Через инструмент `plugin_manager` (режим Creator)
+### Через инструмент `plugin_manager` из локальных исходников
 
 ```
 plugin_manager { action: "install_bundle", target: "C:\\git\\dsh-edt-plugin\\edt-mcp" }
 ```
 
+Установка по пути (`link:`) удобна при разработке: правки в репозитории видны
+после пересборки профиля, публиковать версию ради каждой правки не нужно.
+
 ### Из релизного tarball
 
 Начиная с тега `v0.9.0` workflow `release.yml` собирает `edt-mcp` в `.tgz` и прикрепляет
-его к GitHub Release. Для **публичного** репозитория бандл ставится прямо по URL:
+его к GitHub Release. Бандл ставится прямо по URL:
 
 ```
 plugin_manager {
   action: "install_bundle",
-  target: "https://github.com/pravets/dsh-edt-plugin/releases/download/v0.9.0/local-dsh-edt-mcp-0.9.0.tgz"
+  target: "https://github.com/pravets/dsh-edt-projects/releases/download/v0.9.0/dsh-edt-projects-0.9.0.tgz"
 }
 ```
 
-Репозиторий закрытый, поэтому анонимный запрос к этому URL отвечает `404` —
-скачайте ассет с токеном и поставьте локальным путём:
+Если репозиторий когда-нибудь снова станет закрытым, ассет скачивается с токеном:
 
 ```
 gh release download v0.9.0 --pattern '*.tgz' -D dist
@@ -95,14 +107,14 @@ gh release download v0.9.0 --pattern '*.tgz' -D dist
 ```
 plugin_manager {
   action: "install_bundle",
-  target: "C:\\git\\dsh-edt-plugin\\dist\\local-dsh-edt-mcp-0.9.0.tgz"
+  target: "C:\\git\\dsh-edt-plugin\\dist\\dsh-edt-projects-0.9.0.tgz"
 }
 ```
 
 Менеджер плагинов принимает четыре вида спецификации: имя в реестре npm, абсолютный
 путь, git-адрес и tarball (локальный файл или URL).
 
-Установка меняет профиль (`~/.dsh/profiles/web`) и действует на все сессии профиля.
+Установка меняет профиль (`~/.dsh/profiles/desktop`) и действует на все сессии профиля.
 Вручную `package.json` профиля и `cordis.patch.yml` не правим — это делает менеджер.
 
 ## Версионирование
@@ -140,7 +152,7 @@ plugin_manager {
 {
   "wiki": { "paths": ["C:\\git\\dev-llm-wiki"], "entry": "wiki/index.md" },
   "servers": {
-    "edt":   { "url": "http://127.0.0.1:8767/mcp" },
+    "edt":   { "url": "http://127.0.0.1:8765/mcp" },
     "tasks": { "url": "https://tracker.example/mcp" },
     "bsl":   { "root": "C:\\git\\trade\\src\\cf" }
   }
@@ -301,7 +313,7 @@ id: навык определяет их в момент работы — `sonar
 
 | Переменная | Что настраивает | По умолчанию |
 |---|---|---|
-| `EDT_MCP_URL` | MCP-сервер EDT (`mcp__edt__*`) | `http://127.0.0.1:8767/mcp` |
+| `EDT_MCP_URL` | MCP-сервер EDT (`mcp__edt__*`) | `http://127.0.0.1:8765/mcp` |
 | `EDT_MCP_TOKEN` | заголовок `Authorization: Bearer` для EDT | не задан |
 | `DSH_1C_BSL_LS_JAR` | готовый jar BSL Language Server (главнее остальных настроек) | не задан |
 | `DSH_1C_BSL_LS_URL` | прямой URL на jar вместо GitHub | не задан |

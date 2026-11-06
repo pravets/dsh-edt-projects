@@ -96,7 +96,7 @@ async function main() {
 
   // В CI порт из патча свободен, поэтому тестируется штатный путь без переопределений.
   // Локально рядом может работать настоящий сервер EDT — тогда SMOKE_PORT/EDT_MCP_URL.
-  const port = process.env.SMOKE_PORT ?? '8767';
+  const port = process.env.SMOKE_PORT ?? '8765';
   const override = process.env.EDT_MCP_URL ?? (process.env.SMOKE_PORT ? `http://127.0.0.1:${port}/mcp` : null);
   const targetUrl = override ?? `http://127.0.0.1:${port}/mcp`;
   const url = new URL(targetUrl);

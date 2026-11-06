@@ -292,7 +292,7 @@ async function responseMessage(response) {
  */
 export async function fetchJson(fetchImpl, url, { log = () => {}, token } = {}) {
   log(`запрашиваю ${url}`);
-  const headers = { accept: 'application/vnd.github+json', 'user-agent': 'dsh-edt-plugin' };
+  const headers = { accept: 'application/vnd.github+json', 'user-agent': 'dsh-edt-projects' };
   if (token !== undefined && new URL(url).host === 'api.github.com') headers.authorization = `Bearer ${token}`;
 
   const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });

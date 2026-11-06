@@ -1,9 +1,22 @@
 {
-  "name": "@local/dsh-edt-mcp",
+  "name": "dsh-edt-projects",
   "version": "0.9.0",
-  "private": true,
   "type": "module",
   "description": "MCP hub for 1C development: EDT always on, BSL Language Server started in LSP+MCP mode with workspace roots, task tracker via mcp_pin, bundled SonarQube and GitLab skills, with model-facing usage rules",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pravets/dsh-edt-projects.git",
+    "directory": "edt-mcp"
+  },
+  "homepage": "https://github.com/pravets/dsh-edt-projects#readme",
+  "bugs": {
+    "url": "https://github.com/pravets/dsh-edt-projects/issues"
+  },
+  "keywords": ["dsh", "deepseek-harness", "1c", "1c-edt", "bsl", "bsl-language-server", "mcp", "plugin"],
+  "engines": {
+    "node": ">=22"
+  },
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -11,6 +24,9 @@
     "./icon": "./icon.svg"
   },
   "files": ["lib", "skills", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.5"
   },

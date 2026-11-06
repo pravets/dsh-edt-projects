@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -45,4 +46,20 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           files: dist/*.tgz
           generate_release_notes: true
+
+      # Первая публикация в npm делается вручную (npm login + npm publish),
+      # дальше версии из тегов уходят сюда. Уже опубликованную версию шаг
+      # пропускает, чтобы ручной релиз и push тега не конфликтовали.
+      - name: Публикация в npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version=$(node -p "require('./edt-mcp/package.json').version")
+          if npm view "dsh-edt-projects@$version" version >/dev/null 2>&1; then
+            echo "версия $version уже в npm — пропускаю"
+          elif [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "NPM_TOKEN не задан — публикация пропущена"
+          else
+            npm publish --workspace edt-mcp --access public --provenance
+          fi
 

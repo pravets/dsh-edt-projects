@@ -4,36 +4,43 @@
 //
 // Запуск:
 //   node tools/check-edt-mcp.mjs [sdkDir] [url]
-// Порт по умолчанию — 8765, как у EDT-MCP. Если рядом лежит настроенный
-// edt-mcp/cordis.patch.yml, url берётся из него (на этой машине там 8767).
+// Порт по умолчанию — 8765, как у EDT-MCP. Если рядом лежит edt-mcp/cordis.patch.yml,
+// url берётся из него, в том числе из !!js-выражения с запасным адресом.
 // Переопределение: аргументы, затем переменные EDT_MCP_URL и DSH_MCP_SDK_DIR.
 //
 // SDK ищется так: обычный импорт из node_modules (npm install), затем sdkDir
-// (аргумент или DSH_MCP_SDK_DIR), затем установка внутри npx-кэша DSH.
+// (аргумент или DSH_MCP_SDK_DIR).
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_URL = 'http://127.0.0.1:8765/mcp';
-const CACHE_SDK = 'C:\\Users\\i.pravets\\AppData\\Local\\npm-cache\\_npx\\1e7f6d9597241db0\\node_modules\\@modelcontextprotocol\\client';
 
+/**
+ * Адрес сервера из патча бандла. Значение может быть как строкой, так и
+ * !!js-выражением (`process.env.EDT_MCP_URL ?? "http://127.0.0.1:8765/mcp"`),
+ * поэтому вытаскиваем первый http(s)-адрес из строки url.
+ */
 function urlFromPatch() {
   const patch = join(here, '..', 'edt-mcp', 'cordis.patch.yml');
   if (!existsSync(patch)) return null;
-  const match = /^\s*url:\s*(\S+)\s*$/m.exec(readFileSync(patch, 'utf8'));
-  return match?.[1] ?? null;
+  const line = /^\s*url:\s*(.+)$/m.exec(readFileSync(patch, 'utf8'))?.[1];
+  return /(https?:\/\/[^"'\s]+)/.exec(line ?? '')?.[1] ?? null;
 }
 
 async function loadSdk() {
   try {
     return await import('@modelcontextprotocol/client');
   } catch {
-    // Пакета в node_modules нет — падать пока рано, пробуем каталог ниже.
+    // Пакета в node_modules нет — падать пока рано, пробуем каталог из окружения.
   }
-  const sdkDir = process.argv[2] ?? process.env.DSH_MCP_SDK_DIR ?? CACHE_SDK;
-  if (!existsSync(join(sdkDir, 'dist', 'index.mjs'))) {
-    throw new Error(`MCP SDK не найден: ни в node_modules, ни в ${sdkDir}. Выполните npm install`);
+  const sdkDir = process.argv[2] ?? process.env.DSH_MCP_SDK_DIR;
+  if (sdkDir === undefined || !existsSync(join(sdkDir, 'dist', 'index.mjs'))) {
+    throw new Error(
+      'MCP SDK не найден: выполните npm install в репозитории либо задайте DSH_MCP_SDK_DIR ' +
+        '(каталог пакета @modelcontextprotocol/client с dist/index.mjs) или передайте его первым аргументом.',
+    );
   }
   return import(pathToFileURL(join(sdkDir, 'dist', 'index.mjs')).href);
 }

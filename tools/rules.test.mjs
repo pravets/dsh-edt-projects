@@ -104,13 +104,13 @@ test('тесты: без project правило не требует конкре
 });
 
 test('правило правок действует и при недоступном edt: оно про конфигурацию, а не про связь', () => {
-  const text = buildRulesText({ EDT_MCP_URL: 'http://127.0.0.1:8767/mcp' }, []);
+  const text = buildRulesText({ EDT_MCP_URL: 'http://127.0.0.1:8765/mcp' }, []);
   assert.match(text, /Правки конфигурации — только через EDT/);
 });
 
 test('normalizeServers отбрасывает disabled и выводит транспорт', () => {
   const entries = normalizeServers({
-    edt: { url: 'http://127.0.0.1:8767/mcp' },
+    edt: { url: 'http://127.0.0.1:8765/mcp' },
     bsl: { transport: 'stdio', command: 'java', lazy: true },
     tasks: { url: 'http://x/mcp', disabled: true },
   });

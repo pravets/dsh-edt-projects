@@ -11,7 +11,7 @@ export const DEFAULTS = {
   version: CONFIG_VERSION,
   wiki: { paths: [], entry: '' },
   servers: {
-    edt: { url: 'http://127.0.0.1:8767/mcp' },
+    edt: { url: 'http://127.0.0.1:8765/mcp' },
     bsl: { root: '' },
     tasks: { url: '' },
   },
