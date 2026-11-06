@@ -1,7 +1,8 @@
 name: Release
 
 # Тег v0.9.0 -> проверка, что версия в plugin/package.json совпадает,
-# сборка tarball и прикрепление его к GitHub Release.
+# сборка tarball, GitHub Release и публикация в npm через trusted publisher
+# (OIDC): секретов и токенов нет, npm выдаёт короткоживущий токен по id-token.
 # Установка потом: plugin_manager install_bundle с URL этого .tgz.
 on:
   push:
@@ -28,9 +29,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          # Пишет в .npmrc строку //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}:
-          # без этого npm не видит NODE_AUTH_TOKEN и публикация падает с ENEEDAUTH.
-          registry-url: https://registry.npmjs.org
+
+      # Node 22 приносит npm 10.x, а trusted publishing требует npm >= 11.5.
+      - name: npm для trusted publishing
+        run: npm install -g "npm@^11.15.0"
 
       - name: Зависимости
         run: npm ci
@@ -50,18 +52,15 @@ jobs:
           files: dist/*.tgz
           generate_release_notes: true
 
-      # Первая публикация в npm делается вручную (npm login + npm publish),
-      # дальше версии из тегов уходят сюда. Уже опубликованную версию шаг
-      # пропускает, чтобы ручной релиз и push тега не конфликтовали.
+      # Публикует trusted publisher, настроенный на npm для этого репозитория и
+      # файла release.yml: токен выдаёт сам npm по OIDC (permissions.id-token).
+      # Уже опубликованную версию шаг пропускает, чтобы ручной релиз и push тега
+      # не конфликтовали.
       - name: Публикация в npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           version=$(node -p "require('./plugin/package.json').version")
           if npm view "dsh-edt-projects@$version" version >/dev/null 2>&1; then
             echo "версия $version уже в npm — пропускаю"
-          elif [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN не задан — публикация пропущена"
           else
             npm publish --workspace plugin --access public --provenance
           fi

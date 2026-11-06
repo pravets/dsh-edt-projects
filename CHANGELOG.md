@@ -32,8 +32,9 @@
   `plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }`.
   В тарболл добавлены `README.md` и `LICENSE`, в манифесте — `license`,
   `repository`, `homepage`, `bugs`, `keywords`, `publishConfig.access: public`.
-- CI: `release.yml` публикует версию из тега в npm (идемпотентно — уже
-  опубликованную версию пропускает; без секрета `NPM_TOKEN` шаг пропускается).
+- CI: `release.yml` публикует версию из тега в npm через trusted publisher
+  (OIDC, без токенов и секретов; идемпотентно — уже опубликованную версию
+  пропускает).
 
 ### Исправлено
 
