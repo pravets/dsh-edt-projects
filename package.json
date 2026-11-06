@@ -1,6 +1,6 @@
 {
   "name": "dsh-edt-plugin",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness bundle: MCP hub for 1C development with on-demand servers, per-project settings, a read-only wiki, testability rules, config init/upgrade and bundled SonarQube/GitLab skills",
@@ -16,7 +16,7 @@
     "validate:tag": "node tools/validate-bundle.mjs --tag",
     "check:edt": "node tools/check-edt-mcp.mjs",
     "smoke": "node tools/smoke-bundle.mjs",
-    "test": "node tools/rules.test.mjs && node tools/bsl.test.mjs && node tools/config.test.mjs && node tools/wiki.test.mjs && node tools/tests.test.mjs && node tools/schema.test.mjs && node tools/skills.test.mjs",
+    "test": "node tools/rules.test.mjs && node tools/bsl.test.mjs && node tools/config.test.mjs && node tools/wiki.test.mjs && node tools/tests.test.mjs && node tools/schema.test.mjs && node tools/skills.test.mjs && node tools/cwd.test.mjs",
     "config:init": "node tools/config-init.mjs",
     "config:dry": "node tools/config-init.mjs --dry-run",
     "pack:check": "npm pack --workspace edt-mcp --dry-run --cache .npm-cache"

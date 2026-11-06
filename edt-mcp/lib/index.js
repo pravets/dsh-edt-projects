@@ -20,7 +20,7 @@
 // получают каждый свой BSL LS со своим корнем.
 export const name = 'mcp-hub';
 
-export const inject = ['tools'];
+export const inject = ['tools', 'workingDirectory'];
 
 import { watch } from 'node:fs';
 import { bslAvailable, bslSettings, ensureJar, resolveBsl, startBslSupervisor } from './bsl.mjs';
@@ -272,6 +272,27 @@ const textTool = (toolName, description, parameters, execute) => ({
 /** Подпись конфигурации для обнаружения изменений при mcp_reload. */
 const signatureOf = (entry, root) => JSON.stringify({ config: mountConfig(entry), root });
 
+/**
+ * Каталог, от которого считаются настройки проекта, корень BSL и пути вики.
+ * Исходный каталог сессии (`session.header.cwd`) неизменяем, поэтому `cd`
+ * внутри сессии не переключает проект; текущий каталог — только запасной путь,
+ * когда исходный не записан.
+ * @param agent агент с полем session (у подчинённых агентов его может не быть).
+ * @param workingDirectory сервис `ctx.workingDirectory` (необязателен).
+ */
+export function sessionCwd(agent, workingDirectory) {
+  const session = agent?.session;
+  if (session === undefined) return process.cwd();
+  const recorded = session.header?.cwd;
+  if (typeof recorded === 'string' && recorded !== '') return recorded;
+  try {
+    const dir = workingDirectory?.get?.(session);
+    return typeof dir === 'string' && dir !== '' ? dir : process.cwd();
+  } catch {
+    return process.cwd();
+  }
+}
+
 export async function apply(ctx, config) {
   const base = config ?? {};
   const globalState = new Map();
@@ -279,13 +300,7 @@ export async function apply(ctx, config) {
   const watchedProjects = new Set();
   const loggedErrors = new Set();
 
-  const cwdOf = (agent) => {
-    try {
-      return ctx.workingDirectory?.get?.(agent?.session) ?? process.cwd();
-    } catch {
-      return process.cwd();
-    }
-  };
+  const cwdOf = (agent) => sessionCwd(agent, ctx.workingDirectory);
 
   const effectiveFor = (agent) => {
     const effective = resolveConfig({ cwd: cwdOf(agent), env: process.env, base });
