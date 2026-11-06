@@ -1,5 +1,9 @@
-// Загрузка BSL Language Server по требованию: явный путь, прямой URL или
-// последний релиз с GitHub (с проверкой sha256 из API).
+// Загрузка BSL Language Server по требованию: явный путь, прямой URL, страницы
+// релизов GitHub или API (с проверкой sha256).
+//
+// GitHub API без токена даёт 60 запросов в час на IP, поэтому источник выбирается
+// по наличию токена: с токеном — API первым, без токена — сначала обычные
+// страницы релизов (они не в лимите API), а API лишь как резерв.
 //
 // Все переменные окружения — с префиксом DSH_1C_, чтобы не пересекаться ни с
 // чем на машине. Старые имена (BSL_LS_JAR, BSL_MCP_URL…) принимаются как fallback.
@@ -7,6 +11,7 @@
 //   DSH_1C_BSL_LS_JAR        готовый jar (главнее всего остального)
 //   DSH_1C_BSL_LS_URL        прямой URL на jar (зеркало, офлайн-раздача)
 //   DSH_1C_BSL_LS_VERSION    тег релиза, например v1.0.7 (по умолчанию последний)
+//   DSH_1C_BSL_LS_GITHUB_TOKEN  токен GitHub для API (иначе GITHUB_TOKEN, GH_TOKEN)
 //   DSH_1C_BSL_LS_CACHE      каталог кэша (по умолчанию $DSH_HOME/cache/bsl-language-server)
 //   DSH_1C_BSL_LS_DOWNLOAD   «0» — запретить скачивание
 //   DSH_1C_BSL_LS_JAVA       java-команда (по умолчанию java)
@@ -28,6 +33,27 @@ export const REPO = '1c-syntax/bsl-language-server';
 /** 130 МБ по медленному каналу — запас большой. */
 export const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const ASSET_PATTERN = /-exec\.jar$/;
+const RELEASES_URL = `https://github.com/${REPO}/releases`;
+const API_REPO_URL = `https://api.github.com/repos/${REPO}`;
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** GitHub API ответил лимитом запросов: сообщение должно подсказывать выход. */
+export class RateLimitError extends Error {
+  constructor(message, { resetAt, status } = {}) {
+    super(message);
+    this.name = 'RateLimitError';
+    this.resetAt = resetAt;
+    this.status = status;
+  }
+}
+
+/** Скачанный файл не совпал по sha256: повтор без сверки недопустим. */
+export class IntegrityError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'IntegrityError';
+  }
+}
 
 const first = (env, ...names) => names.map((name) => env[name]).find((value) => value !== undefined && value !== '');
 const isOff = (value) => ['0', 'false', 'no', 'off'].includes(String(value).toLowerCase());
@@ -39,6 +65,7 @@ export function bslSettings(env = process.env) {
     jar: first(env, 'DSH_1C_BSL_LS_JAR', 'BSL_LS_JAR'),
     url: first(env, 'DSH_1C_BSL_LS_URL'),
     version: first(env, 'DSH_1C_BSL_LS_VERSION'),
+    githubToken: first(env, 'DSH_1C_BSL_LS_GITHUB_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN'),
     mcpUrl: first(env, 'DSH_1C_BSL_MCP_URL', 'BSL_MCP_URL'),
     cacheDir: first(env, 'DSH_1C_BSL_LS_CACHE') ?? join(env.DSH_HOME ?? join(homedir(), '.dsh'), 'cache', 'bsl-language-server'),
     java: first(env, 'DSH_1C_BSL_LS_JAVA', 'BSL_LS_JAVA') ?? 'java',
@@ -102,7 +129,7 @@ async function downloadToFile(url, target, { fetchImpl, log, timeoutMs = DOWNLOA
   const actual = hash.digest('hex');
   if (expectSha256 !== undefined && actual !== expectSha256) {
     rmSync(partial, { force: true });
-    throw new Error(`sha256 не совпал: ожидался ${expectSha256}, получен ${actual}`);
+    throw new IntegrityError(`sha256 не совпал: ожидался ${expectSha256}, получен ${actual}`);
   }
 
   renameSync(partial, target);
@@ -110,14 +137,77 @@ async function downloadToFile(url, target, { fetchImpl, log, timeoutMs = DOWNLOA
   return target;
 }
 
+/** Предсказуемый адрес ассета: имя файла детерминировано тегом релиза. */
+export function predictAsset(tag) {
+  const version = String(tag).replace(/^v/, '');
+  const name = `bsl-language-server-${version}-exec.jar`;
+  return { tag, name, url: `${RELEASES_URL}/download/${tag}/${name}`, sha256: undefined, unverified: true };
+}
+
+/** Тег последнего релиза из обычной страницы: она редиректит на releases/tag/<тег>. */
+async function latestTag(fetchImpl, log) {
+  const url = `${RELEASES_URL}/latest`;
+  log(`запрашиваю ${url}`);
+  const response = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`страница последнего релиза ${url}: HTTP ${response.status}`);
+  const location = String(response.url ?? response.headers?.get?.('location') ?? '');
+  const tag = location.split('/').filter(Boolean).pop();
+  if (tag === undefined || !/^v?\d/.test(tag)) throw new Error(`не удалось определить тег последнего релиза (${location || url})`);
+  return tag;
+}
+
+/**
+ * Разбирает релиз со страниц github.com — они не расходуют лимит API.
+ * На странице ассетов рядом с ссылкой лежит и sha256.
+ * @returns {{tag: string, name: string, url: string, sha256: string|undefined}}
+ */
+export async function resolveReleaseViaHtml(fetchImpl, { tag, log = () => {} } = {}) {
+  const resolvedTag = tag ?? (await latestTag(fetchImpl, log));
+  const url = `${RELEASES_URL}/expanded_assets/${encodeURIComponent(resolvedTag)}`;
+  log(`запрашиваю ${url}`);
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`страница ассетов ${url}: HTTP ${response.status}`);
+
+  const html = await response.text();
+  const name = /href="[^"]*\/([^"/]+-exec\.jar)"/.exec(html)?.[1];
+  if (name === undefined) throw new Error(`на ${url} нет ассета *-exec.jar`);
+  const start = html.indexOf(name);
+  const sha256 = /sha256:([0-9a-f]{64})/i.exec(html.slice(start, start + 2000))?.[1];
+  return { tag: resolvedTag, name, url: `${RELEASES_URL}/download/${resolvedTag}/${name}`, sha256 };
+}
+
+/** Ассет из GitHub API: JSON содержит и тег, и digest. */
+async function apiAsset(tag, { fetchImpl, log, token }) {
+  const url = tag === undefined ? `${API_REPO_URL}/releases/latest` : `${API_REPO_URL}/releases/tags/${tag}`;
+  return selectExecAsset(await fetchJson(fetchImpl, url, { log, token }));
+}
+
+/**
+ * Источники релиза по порядку. С токеном API первым, без токена — страницы
+ * релизов: лимит 60/ч на IP перестаёт быть условием инициализации.
+ * Функции не вызываются здесь: каждый следующий источник пробуется только
+ * после отказа предыдущего, поэтому успешная страница не тянет за собой API.
+ */
+function assetSources(settings, deps) {
+  const { fetchImpl, log, token } = deps;
+  const tag = settings.version;
+  const viaHtml = () => resolveReleaseViaHtml(fetchImpl, { tag, log });
+  const viaApi = () => apiAsset(tag, deps);
+  const sources = token === undefined ? [viaHtml, viaApi] : [viaApi, viaHtml];
+  // Предсказуемый адрес — последний сетевой резерв, только если тег известен.
+  if (tag !== undefined) sources.push(async () => predictAsset(tag));
+  return sources;
+}
+
 /**
  * Возвращает путь к jar: явный, из кэша или скачанный с GitHub.
  * @param settings настройки из bslSettings().
- * @param deps { fetchImpl, log } — подменяются в тестах.
+ * @param deps { fetchImpl, log, warn } — подменяются в тестах.
  */
 export async function ensureJar(settings, deps = {}) {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   const log = deps.log ?? (() => {});
+  const warn = deps.warn ?? log;
 
   if (settings.jar !== undefined) {
     if (!existsSync(settings.jar)) throw new Error(`DSH_1C_BSL_LS_JAR указывает на ${settings.jar}, файла нет`);
@@ -134,35 +224,94 @@ export async function ensureJar(settings, deps = {}) {
     throw new Error('BSL LS не настроен: задайте DSH_1C_BSL_LS_JAR (или URL) либо разрешите скачивание (DSH_1C_BSL_LS_DOWNLOAD не 0)');
   }
 
-  // Зафиксированная версия: сначала кэш, потом API этого тега.
+  const cached = cachedJars(settings.cacheDir);
+  // Зафиксированная версия: сначала кэш именно этой версии.
   if (settings.version !== undefined) {
     const target = join(settings.cacheDir, `bsl-language-server-${settings.version.replace(/^v/, '')}-exec.jar`);
     if (existsSync(target)) return target;
-    const release = await fetchJson(fetchImpl, `https://api.github.com/repos/${REPO}/releases/tags/${settings.version}`, log);
-    const asset = selectExecAsset(release);
-    return downloadToFile(asset.url, join(settings.cacheDir, asset.name), { fetchImpl, log, expectSha256: asset.sha256 });
-  }
-
-  // Версия не задана: годится любой уже скачанный jar, иначе спрашиваем последний релиз.
-  const cached = cachedJars(settings.cacheDir);
-  if (cached.length > 0) {
+  } else if (cached.length > 0) {
+    // Версия не задана: годится любой уже скачанный jar.
     log(`использую кэш ${cached[0]}`);
     return cached[0];
   }
 
-  const release = await fetchJson(fetchImpl, `https://api.github.com/repos/${REPO}/releases/latest`, log);
-  const asset = selectExecAsset(release);
-  return downloadToFile(asset.url, join(settings.cacheDir, asset.name), { fetchImpl, log, expectSha256: asset.sha256 });
+  const failures = [];
+  let rateLimited;
+  const text = (error) => (error instanceof Error ? error.message : String(error));
+
+  for (const source of assetSources(settings, { fetchImpl, log, token: settings.githubToken })) {
+    let asset;
+    try {
+      asset = await source();
+    } catch (error) {
+      if (error instanceof RateLimitError) rateLimited = error;
+      failures.push(error);
+      warn(`источник релиза не сработал: ${text(error)}`);
+      continue;
+    }
+
+    const target = join(settings.cacheDir, asset.name);
+    if (existsSync(target)) return target;
+    if (asset.unverified === true) {
+      warn(`sha256 для ${asset.name} не сверен: страницы релиза недоступны, скачиваю по предсказуемому адресу`);
+    }
+    try {
+      return await downloadToFile(asset.url, target, { fetchImpl, log, expectSha256: asset.sha256 });
+    } catch (error) {
+      // Подмена файла не лечится повтором без сверки — сразу наверх.
+      if (error instanceof IntegrityError) throw error;
+      failures.push(error);
+      warn(`не удалось скачать ${asset.name}: ${text(error)}`);
+    }
+  }
+
+  // Любая версия из кэша лучше, чем немигающая инициализация BSL LS.
+  if (cached.length > 0) {
+    const reason = rateLimited ?? failures[failures.length - 1];
+    warn(`релиз недоступен (${reason === undefined ? 'нет источников' : text(reason)}); использую кэш ${basename(cached[0])}`);
+    return cached[0];
+  }
+
+  if (rateLimited !== undefined) throw rateLimited;
+  throw new Error(`не удалось получить релиз BSL LS: ${failures.map(text).join('; ')}`);
 }
 
-async function fetchJson(fetchImpl, url, log) {
+/** Тело ответа API в виде текста ошибки, если оно есть. */
+async function responseMessage(response) {
+  try {
+    const body = await response.json();
+    return typeof body?.message === 'string' ? body.message : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Запрос к GitHub API. Токен уходит только на api.github.com — ни на страницы,
+ * ни на скачивание ассета. Лимит распознаётся и превращается в понятную ошибку.
+ */
+export async function fetchJson(fetchImpl, url, { log = () => {}, token } = {}) {
   log(`запрашиваю ${url}`);
-  const response = await fetchImpl(url, {
-    headers: { accept: 'application/vnd.github+json', 'user-agent': 'dsh-edt-plugin' },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`GitHub API ${url}: HTTP ${response.status}`);
-  return response.json();
+  const headers = { accept: 'application/vnd.github+json', 'user-agent': 'dsh-edt-plugin' };
+  if (token !== undefined && new URL(url).host === 'api.github.com') headers.authorization = `Bearer ${token}`;
+
+  const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (response.ok) return response.json();
+
+  const message = await responseMessage(response);
+  const header = (name) => response.headers?.get?.(name);
+  const resetSeconds = Number(header('x-ratelimit-reset'));
+  const resetAt = Number.isFinite(resetSeconds) && resetSeconds > 0 ? resetSeconds : undefined;
+  const limited = response.status === 429 || (response.status === 403 && (header('x-ratelimit-remaining') === '0' || /rate limit/i.test(message) || resetAt !== undefined));
+  if (limited) {
+    const until = resetAt === undefined ? '' : ` Сброс лимита не раньше ${new Date(resetAt * 1000).toISOString()}.`;
+    throw new RateLimitError(
+      `GitHub API исчерпал лимит запросов (без токена — 60/ч на IP).${until}` +
+        ' Варианты: задать DSH_1C_BSL_LS_GITHUB_TOKEN, DSH_1C_BSL_LS_VERSION (скачивание без API), DSH_1C_BSL_LS_URL или DSH_1C_BSL_LS_JAR.',
+      { resetAt, status: response.status },
+    );
+  }
+  throw new Error(`GitHub API ${url}: HTTP ${response.status}${message === '' ? '' : ` — ${message}`}`);
 }
 
 /**
@@ -176,11 +325,13 @@ export async function resolveBsl(settings, deps = {}) {
   return { transport: 'stdio', command: settings.java, args: ['-jar', jar, 'mcp'], cwd: settings.cwd };
 }
 
-/** Можно ли вообще поднять сервер: без скачивания и без пути он «не настроен». */
+/** Можно ли вообще поднять сервер: без скачивания, пути и кэша он «не настроен». */
 export function bslAvailable(settings) {
   if (settings.mcpUrl !== undefined) return true;
   if (settings.jar !== undefined || settings.url !== undefined) return true;
-  return settings.downloadAllowed;
+  if (settings.downloadAllowed) return true;
+  // Кэш остаётся рабочим источником и при DSH_1C_BSL_LS_DOWNLOAD=0.
+  return settings.cacheDir !== undefined && cachedJars(settings.cacheDir).length > 0;
 }
 
 /** Свободный порт на loopback. */

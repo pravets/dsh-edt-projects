@@ -26,6 +26,9 @@
 #   DSH_1C_BSL_LS_JAR         готовый bsl-language-server jar (главнее всего)
 #   DSH_1C_BSL_LS_URL         прямой URL на jar вместо GitHub
 #   DSH_1C_BSL_LS_VERSION     тег релиза, например v1.0.7 (по умолчанию последний)
+#   DSH_1C_BSL_LS_GITHUB_TOKEN токен GitHub для API (иначе GITHUB_TOKEN, GH_TOKEN):
+#                             без него загрузка идёт со страниц релизов и не упирается
+#                             в лимит API 60/ч на IP
 #   DSH_1C_BSL_LS_CACHE       каталог кэша ($DSH_HOME/cache/bsl-language-server)
 #   DSH_1C_BSL_LS_DOWNLOAD    «0» — не скачивать, использовать только готовый jar
 #   DSH_1C_BSL_LS_JAVA        java-команда (по умолчанию java)

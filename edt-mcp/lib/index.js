@@ -414,14 +414,15 @@ export async function apply(ctx, config) {
     if (entry.provisioned) {
       try {
         const log = (message) => ctx.logger?.info?.(`mcp-hub(${serverName}): ${message}`);
+        const warn = (message) => ctx.logger?.warn?.(`mcp-hub(${serverName}): ${message}`);
         const mode = options.mode ?? bsl.mode;
         let resolved;
         if (bsl.mcpUrl !== undefined) {
           resolved = { transport: 'streamable-http', url: bsl.mcpUrl };
         } else if (mode === 'stdio') {
-          resolved = await resolveBsl(bsl, { log });
+          resolved = await resolveBsl(bsl, { log, warn });
         } else {
-          const jar = await ensureJar(bsl, { log });
+          const jar = await ensureJar(bsl, { log, warn });
           const supervisor = await startBslSupervisor({ jar, java: bsl.java, root, port: bsl.port, log });
           item.supervisor = supervisor;
           resolved = { transport: 'streamable-http', url: supervisor.url };
