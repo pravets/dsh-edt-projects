@@ -1,6 +1,6 @@
 name: Release
 
-# Тег v0.9.0 -> проверка, что версия в edt-mcp/package.json совпадает,
+# Тег v0.9.0 -> проверка, что версия в plugin/package.json совпадает,
 # сборка tarball и прикрепление его к GitHub Release.
 # Установка потом: plugin_manager install_bundle с URL этого .tgz.
 on:
@@ -57,7 +57,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          version=$(node -p "require('./edt-mcp/package.json').version")
+          version=$(node -p "require('./plugin/package.json').version")
           if npm view "dsh-edt-projects@$version" version >/dev/null 2>&1; then
             echo "версия $version уже в npm — пропускаю"
           elif [ -z "$NODE_AUTH_TOKEN" ]; then

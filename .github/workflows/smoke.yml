@@ -11,12 +11,12 @@ on:
   push:
     branches: [master]
     paths:
-      - 'edt-mcp/**'
+      - 'plugin/**'
       - 'tools/**'
       - '.github/workflows/smoke.yml'
   pull_request:
     paths:
-      - 'edt-mcp/**'
+      - 'plugin/**'
       - 'tools/**'
       - '.github/workflows/smoke.yml'
 
