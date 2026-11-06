@@ -28,6 +28,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          # Пишет в .npmrc строку //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}:
+          # без этого npm не видит NODE_AUTH_TOKEN и публикация падает с ENEEDAUTH.
+          registry-url: https://registry.npmjs.org
 
       - name: Зависимости
         run: npm ci
