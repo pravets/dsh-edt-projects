@@ -3,7 +3,7 @@
 //
 // Запуск:
 //   node tools/validate-bundle.mjs            обычная проверка
-//   node tools/validate-bundle.mjs --tag v1.1.0   дополнительно сверить версию с тегом
+//   node tools/validate-bundle.mjs --tag v0.9.0   дополнительно сверить версию с тегом
 //
 // Код возврата: 0 — замечаний нет, 1 — есть.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -62,7 +62,7 @@ let patchPath = null;
 if (manifest) {
   if (!manifest.name) fail('package.json: не задано name');
   if (!manifest.version) fail('package.json: не задано version');
-  else if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(manifest.version)) fail(`package.json: version от 1.0.0, получено ${manifest.version}`);
+  else if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(manifest.version)) fail(`package.json: ожидался SemVer вида 0.9.0, получено ${manifest.version}`);
   else pass(`версия ${manifest.version}`);
 
   const declared = manifest.dsh?.bundle?.patch;
@@ -93,6 +93,23 @@ if (manifest) {
     const target = String(value).replace('./', '');
     const found = expand(target);
     if (found.length === 0) fail(`package.json: exports["${key}"] указывает на ${value}, файлов нет`);
+  }
+
+  // Версия объявлена в четырёх местах: корень, бандл и два поля lock.
+  // Забытое при бампе место — самая частая ошибка, поэтому сверяем явно.
+  const rootManifest = readJson(join(root, 'package.json'));
+  const lock = readJson(join(root, 'package-lock.json'));
+  const versionSources = [
+    ['package.json', rootManifest?.version],
+    ['package-lock.json:version', lock?.version],
+    ['package-lock.json:packages[""]', lock?.packages?.['']?.version],
+    ['package-lock.json:packages["edt-mcp"]', lock?.packages?.['edt-mcp']?.version],
+  ].filter(([, version]) => version !== undefined);
+  const mismatched = versionSources.filter(([, version]) => version !== manifest.version);
+  if (mismatched.length > 0) {
+    fail(`версии расходятся: бандл ${manifest.version}, ${mismatched.map(([where, version]) => `${where} ${version}`).join(', ')}`);
+  } else {
+    pass(`версии согласованы: ${versionSources.map(([where]) => where).join(', ')} — ${manifest.version}`);
   }
 }
 

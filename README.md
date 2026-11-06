@@ -75,13 +75,13 @@ plugin_manager { action: "install_bundle", target: "C:\\git\\dsh-edt-plugin\\edt
 
 ### Из релизного tarball
 
-Начиная с тега `v1.0.0` workflow `release.yml` собирает `edt-mcp` в `.tgz` и прикрепляет
+Начиная с тега `v0.9.0` workflow `release.yml` собирает `edt-mcp` в `.tgz` и прикрепляет
 его к GitHub Release. Для **публичного** репозитория бандл ставится прямо по URL:
 
 ```
 plugin_manager {
   action: "install_bundle",
-  target: "https://github.com/pravets/dsh-edt-plugin/releases/download/v1.0.0/local-dsh-edt-mcp-1.0.0.tgz"
+  target: "https://github.com/pravets/dsh-edt-plugin/releases/download/v0.9.0/local-dsh-edt-mcp-0.9.0.tgz"
 }
 ```
 
@@ -89,13 +89,13 @@ plugin_manager {
 скачайте ассет с токеном и поставьте локальным путём:
 
 ```
-gh release download v1.0.0 --pattern '*.tgz' -D dist
+gh release download v0.9.0 --pattern '*.tgz' -D dist
 ```
 
 ```
 plugin_manager {
   action: "install_bundle",
-  target: "C:\\git\\dsh-edt-plugin\\dist\\local-dsh-edt-mcp-1.0.0.tgz"
+  target: "C:\\git\\dsh-edt-plugin\\dist\\local-dsh-edt-mcp-0.9.0.tgz"
 }
 ```
 
@@ -104,6 +104,20 @@ plugin_manager {
 
 Установка меняет профиль (`~/.dsh/profiles/web`) и действует на все сессии профиля.
 Вручную `package.json` профиля и `cordis.patch.yml` не правим — это делает менеджер.
+
+## Версионирование
+
+Проект в статусе беты и версионируется как **0.x** (текущая — `v0.9.0`). Значит,
+между версиями 0.x без миграции могут меняться:
+
+- ключи `.dsh-1c.json` и имена переменных окружения (`config upgrade` дополняет
+  файл, но совместимость не гарантирует);
+- имена и параметры инструментов хаба (`mcp_servers`, `mcp_pin`, `mcp_reload`, …);
+- структура `cordis.patch.yml`, который ставит менеджер плагинов.
+
+Версия 1.0.0 будет означать зафиксированный API: с неё ломающие изменения пойдут
+только через старшую цифру. История в [CHANGELOG.md](CHANGELOG.md) пересчитана по
+одной шкале (1.N.M → 0.N.M); прежний тег `v1.0.0` снят, актуальный — `v0.9.0`.
 
 ## Настройки на проект
 

@@ -1,6 +1,6 @@
 name: Release
 
-# Тег v1.0.0 -> проверка, что версия в edt-mcp/package.json совпадает,
+# Тег v0.9.0 -> проверка, что версия в edt-mcp/package.json совпадает,
 # сборка tarball и прикрепление его к GitHub Release.
 # Установка потом: plugin_manager install_bundle с URL этого .tgz.
 on:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Тег релиза, например v1.0.0'
+        description: 'Тег релиза, например v0.9.0'
         required: true
 
 permissions:
