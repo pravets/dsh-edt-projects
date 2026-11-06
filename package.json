@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "workspaces": [
-    "plugin"
+    "packages/dsh-edt-projects"
   ],
   "scripts": {
     "validate": "node tools/validate-bundle.mjs",
@@ -19,7 +19,7 @@
     "test": "node tools/rules.test.mjs && node tools/bsl.test.mjs && node tools/config.test.mjs && node tools/wiki.test.mjs && node tools/tests.test.mjs && node tools/schema.test.mjs && node tools/skills.test.mjs && node tools/cwd.test.mjs",
     "config:init": "node tools/config-init.mjs",
     "config:dry": "node tools/config-init.mjs --dry-run",
-    "pack:check": "npm pack --workspace plugin --dry-run --cache .npm-cache"
+    "pack:check": "npm pack --workspace dsh-edt-projects --dry-run --cache .npm-cache"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.2.0",

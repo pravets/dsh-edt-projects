@@ -11,7 +11,7 @@ import {
   readJsonConfig,
   resolveConfig,
   userConfigPath,
-} from '../plugin/lib/config.mjs';
+} from '../packages/dsh-edt-projects/lib/config.mjs';
 
 const base = join(process.cwd(), '.smoke');
 mkdirSync(base, { recursive: true });

@@ -11,12 +11,12 @@ on:
   push:
     branches: [master]
     paths:
-      - 'plugin/**'
+      - 'packages/dsh-edt-projects/**'
       - 'tools/**'
       - '.github/workflows/smoke.yml'
   pull_request:
     paths:
-      - 'plugin/**'
+      - 'packages/dsh-edt-projects/**'
       - 'tools/**'
       - '.github/workflows/smoke.yml'
 
@@ -52,7 +52,7 @@ jobs:
       - name: Сборка tarball бандла
         run: |
           mkdir -p dist
-          npm pack --workspace plugin --pack-destination dist
+          npm pack --workspace dsh-edt-projects --pack-destination dist
 
       - name: Smoke
         run: npm run smoke

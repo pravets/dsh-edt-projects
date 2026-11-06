@@ -14,10 +14,10 @@ import {
   isSonarEnabled,
   parseFrontmatter,
   skillFile,
-} from '../plugin/lib/skills.mjs';
+} from '../packages/dsh-edt-projects/lib/skills.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const skillsRoot = join(here, '..', 'plugin', 'skills');
+const skillsRoot = join(here, '..', 'packages', 'dsh-edt-projects', 'skills');
 
 const providerWith = (config) => createSkillsProvider({ resolveConfig: () => config });
 const names = (config) => providerWith(config).list({}).map((skill) => skill.name);

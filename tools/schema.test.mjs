@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { initFile, readExisting, upgradeFile } from '../plugin/lib/config-file.mjs';
-import { CONFIG_VERSION, DEFAULTS, isKnownPath, planUpgrade, stringifyConfig, validateConfig } from '../plugin/lib/schema.mjs';
+import { initFile, readExisting, upgradeFile } from '../packages/dsh-edt-projects/lib/config-file.mjs';
+import { CONFIG_VERSION, DEFAULTS, isKnownPath, planUpgrade, stringifyConfig, validateConfig } from '../packages/dsh-edt-projects/lib/schema.mjs';
 
 const base = join(process.cwd(), '.smoke');
 mkdirSync(base, { recursive: true });

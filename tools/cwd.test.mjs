@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { inject, sessionCwd } from '../plugin/lib/index.js';
+import { inject, sessionCwd } from '../packages/dsh-edt-projects/lib/index.js';
 
 const agentWith = (header) => ({ session: { header } });
 

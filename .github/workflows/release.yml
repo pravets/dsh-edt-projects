@@ -1,6 +1,6 @@
 name: Release
 
-# Тег v0.9.0 -> проверка, что версия в plugin/package.json совпадает,
+# Тег v0.9.0 -> проверка, что версия в packages/dsh-edt-projects/package.json совпадает,
 # сборка tarball, GitHub Release и публикация в npm через trusted publisher
 # (OIDC): секретов и токенов нет, npm выдаёт короткоживущий токен по id-token.
 # Установка потом: plugin_manager install_bundle с URL этого .tgz.
@@ -43,7 +43,7 @@ jobs:
       - name: Сборка tarball
         run: |
           mkdir -p dist
-          npm pack --workspace plugin --pack-destination dist --cache .npm-cache
+          npm pack --workspace dsh-edt-projects --pack-destination dist --cache .npm-cache
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v3
@@ -58,10 +58,10 @@ jobs:
       # не конфликтовали.
       - name: Публикация в npm
         run: |
-          version=$(node -p "require('./plugin/package.json').version")
+          version=$(node -p "require('./packages/dsh-edt-projects/package.json').version")
           if npm view "dsh-edt-projects@$version" version >/dev/null 2>&1; then
             echo "версия $version уже в npm — пропускаю"
           else
-            npm publish --workspace plugin --access public --provenance
+            npm publish --workspace dsh-edt-projects --access public --provenance
           fi
 

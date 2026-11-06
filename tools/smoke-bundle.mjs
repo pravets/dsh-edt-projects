@@ -26,7 +26,7 @@ const JS_TAG = /!!js\s+'((?:[^'\\]|\\.)*)'/g;
 const parsePatch = (text) => parseYaml(text.replace(JS_TAG, (_, expr) => JSON.stringify({ js: expr })));
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const patchFile = join(root, 'plugin', 'cordis.patch.yml');
+const patchFile = join(root, 'packages', 'dsh-edt-projects', 'cordis.patch.yml');
 const require = createRequire(import.meta.url);
 
 const fail = (message) => {
@@ -66,7 +66,7 @@ function run(args, { env, allowFailure = false, label } = {}) {
 // уезжает в профиль, а не отдельную копию настроек.
 function readHubRow() {
   const rows = parsePatch(readFileSync(patchFile, 'utf8'));
-  const manifest = JSON.parse(readFileSync(join(root, 'plugin', 'package.json'), 'utf8'));
+  const manifest = JSON.parse(readFileSync(join(root, 'packages', 'dsh-edt-projects', 'package.json'), 'utf8'));
   for (const row of rows ?? []) {
     for (const item of row?.insert ?? []) {
       if (item?.name === manifest.name) return item;
@@ -77,8 +77,8 @@ function readHubRow() {
 
 function findTarball() {
   const dist = join(root, 'dist');
-  if (!existsSync(dist)) throw new Error('нет dist/ — сначала соберите tarball (npm pack --workspace plugin --pack-destination dist)');
-  const { version } = JSON.parse(readFileSync(join(root, 'plugin', 'package.json'), 'utf8'));
+  if (!existsSync(dist)) throw new Error('нет dist/ — сначала соберите tarball (npm pack --workspace dsh-edt-projects --pack-destination dist)');
+  const { version } = JSON.parse(readFileSync(join(root, 'packages', 'dsh-edt-projects', 'package.json'), 'utf8'));
   const tgz = readdirSync(dist).filter((f) => f.endsWith(`-${version}.tgz`));
   if (tgz.length !== 1) {
     const seen = readdirSync(dist).filter((f) => f.endsWith('.tgz')).join(', ') || 'ничего';

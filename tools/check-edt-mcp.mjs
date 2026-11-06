@@ -4,7 +4,7 @@
 //
 // Запуск:
 //   node tools/check-edt-mcp.mjs [sdkDir] [url]
-// Порт по умолчанию — 8765, как у EDT-MCP. Если рядом лежит plugin/cordis.patch.yml,
+// Порт по умолчанию — 8765, как у EDT-MCP. Если рядом лежит packages/dsh-edt-projects/cordis.patch.yml,
 // url берётся из него, в том числе из !!js-выражения с запасным адресом.
 // Переопределение: аргументы, затем переменные EDT_MCP_URL и DSH_MCP_SDK_DIR.
 //
@@ -23,7 +23,7 @@ const DEFAULT_URL = 'http://127.0.0.1:8765/mcp';
  * поэтому вытаскиваем первый http(s)-адрес из строки url.
  */
 function urlFromPatch() {
-  const patch = join(here, '..', 'plugin', 'cordis.patch.yml');
+  const patch = join(here, '..', 'packages', 'dsh-edt-projects', 'cordis.patch.yml');
   if (!existsSync(patch)) return null;
   const line = /^\s*url:\s*(.+)$/m.exec(readFileSync(patch, 'utf8'))?.[1];
   return /(https?:\/\/[^"'\s]+)/.exec(line ?? '')?.[1] ?? null;

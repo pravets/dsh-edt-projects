@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildRulesText, mountConfig, normalizeServers } from '../plugin/lib/index.js';
+import { buildRulesText, mountConfig, normalizeServers } from '../packages/dsh-edt-projects/lib/index.js';
 
 const server = (name, state = 'mounted') => ({ name, state });
 
