@@ -122,7 +122,7 @@ async function main() {
   console.log('[3/4] проверяю композицию профиля');
   const dump = run(['--profile', 'headless', '--dump-config'], { env, label: 'dsh --dump-config' });
   const composed = `${dump.stdout}${dump.stderr}`;
-  if (!/edt[-_]mcp/.test(composed)) fail('в композиции профиля нет строки бандла');
+  if (!composed.includes(hub.name)) fail(`в композиции профиля нет строки бандла ${hub.name}`);
   if (!composed.includes('mcp-hub')) fail('в композиции нет плагина mcp-hub');
   if (!hub.config?.servers?.edt) fail('в конфиге хаба нет сервера edt');
   if (!composed.includes('edt')) fail('в композиции нет сервера edt');
