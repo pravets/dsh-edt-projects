@@ -22,8 +22,9 @@ test('bsl описывается, когда сервер настроен да�
   const text = buildRulesText({}, [server('edt'), server('bsl', 'lazy')]);
   assert.match(text, /bsl__\*/);
   assert.match(text, /Подключены по требованию: bsl/);
-  assert.match(text, /mcp_pin/);
+  assert.match(text, /edt_pin/);
   assert.match(text, /root/);
+  assert.doesNotMatch(text, /mcp_pin|mcp_unpin|mcp_servers|mcp_reload|mcp_config/);
 });
 
 test('недоступный сервер не описывается как рабочий, но назван', () => {
@@ -35,6 +36,13 @@ test('недоступный сервер не описывается как р�
 test('всё настроенное и смонтированное — без блока про pin', () => {
   const text = buildRulesText({}, [server('edt'), server('bsl')]);
   assert.doesNotMatch(text, /Подключены по требованию/);
+});
+
+test('имена собственных инструментов — edt_*, без старых mcp_*', () => {
+  const text = buildRulesText({}, [server('edt'), server('bsl', 'lazy')]);
+  assert.match(text, /`edt_servers`/);
+  assert.match(text, /`edt_unpin\(server\)`/);
+  assert.doesNotMatch(text, /mcp_pin|mcp_unpin|mcp_servers|mcp_reload|mcp_config/);
 });
 
 test('правки 1С идут через EDT, с процедурой эскалации', () => {

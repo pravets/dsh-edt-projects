@@ -19,7 +19,7 @@ test('init создаёт файл со всеми ключами по умол�
 
   const written = JSON.parse(readFileSync(fileIn(dir), 'utf8'));
   assert.equal(written.version, CONFIG_VERSION);
-  assert.deepEqual(Object.keys(written).sort(), ['gitlab', 'servers', 'sonar', 'tests', 'version', 'wiki']);
+  assert.deepEqual(Object.keys(written).sort(), ['gitlab', 'projects', 'servers', 'sonar', 'tests', 'version', 'wiki']);
   assert.deepEqual(written.wiki.paths, []);
   assert.equal(written.tests.yaxunit.enabled, false);
 });
@@ -150,7 +150,26 @@ test('stringifyConfig: отступ 2 и перевод строки в конц
 
 test('порядок ключей стабилен: известные по схеме, затем прочие', () => {
   const plan = planUpgrade({ zzz: 1, tests: { vanessa: { enabled: true } }, wiki: { paths: ['a'] } });
-  assert.deepEqual(Object.keys(plan.config), ['version', 'wiki', 'servers', 'tests', 'sonar', 'gitlab', 'zzz']);
+  assert.deepEqual(Object.keys(plan.config), ['version', 'projects', 'wiki', 'servers', 'tests', 'sonar', 'gitlab', 'zzz']);
+});
+
+test('включение проекта: projects в схеме, enabled известен, но не навязывается', () => {
+  assert.deepEqual(DEFAULTS.projects, []);
+  assert.equal('enabled' in DEFAULTS, false, 'enabled не должен попадать в defaults: upgrade выключил бы существующий проект');
+  assert.equal(isKnownPath('enabled'), true);
+  assert.equal(isKnownPath('projects'), true);
+
+  const plan = planUpgrade({ version: CONFIG_VERSION });
+  assert.ok(plan.added.includes('projects'));
+  assert.ok(!plan.added.includes('enabled'));
+
+  const withEnabled = planUpgrade({ version: CONFIG_VERSION, enabled: true });
+  assert.equal(withEnabled.config.enabled, true);
+
+  const bad = validateConfig({ projects: 'C:\\git\\trade' });
+  assert.ok(bad.errors.some((line) => line.includes('projects')));
+  const ok = validateConfig({ projects: ['C:\\git\\trade'], enabled: true });
+  assert.deepEqual(ok.errors, []);
 });
 
 test('sonar и gitlab: ключи в схеме, дефолты выключены, upgrade их добавляет', () => {

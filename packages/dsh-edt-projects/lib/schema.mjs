@@ -3,12 +3,15 @@
 //
 // Правила апгрейда: существующие значения не меняются, недостающие ключи
 // добавляются, неизвестные ключи сохраняются, версия поднимается.
-export const CONFIG_VERSION = 1;
+export const CONFIG_VERSION = 2;
 
 /** Значения по умолчанию для нового файла. Пустые строки и массивы
- *  нормализаторы игнорируют, поэтому init ничего не включает сам по себе. */
+ *  нормализаторы игнорируют, поэтому init ничего не включает сам по себе.
+ *  `enabled` намеренно не входит в defaults: `upgrade` не должен выключать
+ *  проект, который включён самим фактом своего `.dsh-1c.json`. */
 export const DEFAULTS = {
   version: CONFIG_VERSION,
+  projects: [],
   wiki: { paths: [], entry: '' },
   servers: {
     edt: { url: 'http://127.0.0.1:8765/mcp' },
@@ -26,15 +29,17 @@ export const DEFAULTS = {
 /** Известные ключи: путь -> описание и тип. Используются валидацией и README. */
 export const KNOWN = {
   version: { type: 'number', description: 'Версия схемы настроек.' },
+  enabled: { type: 'boolean', description: 'Включить или выключить плагин для этого проекта (сильнее файла проекта и списка projects).' },
+  projects: { type: 'array', description: 'Каталоги проектов, где плагин включён (пользовательский файл).' },
   'wiki.paths': { type: 'array', description: 'Каталоги вики (абсолютные или относительно проекта).' },
   'wiki.entry': { type: 'string', description: 'Входная точка вики, например wiki/index.md.' },
   'servers': { type: 'object', description: 'Настройки MCP-серверов по именам.' },
   'servers.*.url': { type: 'string', description: 'Адрес MCP-сервера (streamable-http).' },
   'servers.*.headers': { type: 'object', description: 'Заголовки запросов, например Authorization.' },
   'servers.*.root': { type: 'string', description: 'Корень рабочего пространства (для bsl).' },
-  'servers.*.lazy': { type: 'boolean', description: 'Не подключать на старте, только по mcp_pin.' },
-  'servers.*.shared': { type: 'boolean', description: 'Одна копия на процесс вместо скоупа агента.' },
-  'servers.*.provision': { type: 'boolean', description: 'Параметры запуска добираются на mcp_pin.' },
+  'servers.*.lazy': { type: 'boolean', description: 'Не подключать на старте, только по edt_pin.' },
+  'servers.*.shared': { type: 'boolean', description: 'Устарело: серверы всегда монтируются в скоупе сессии.' },
+  'servers.*.provision': { type: 'boolean', description: 'Параметры запуска добираются на edt_pin.' },
   'servers.*.toolCallTimeoutMs': { type: 'number', description: 'Таймаут вызова инструмента.' },
   'servers.*.failOnStartupError': { type: 'boolean', description: 'Падать, если стартовое подключение не удалось.' },
   'servers.*.reconnect': { type: 'object', description: 'Политика переподключения.' },
@@ -169,6 +174,12 @@ export function validateConfig(config) {
 
   if (isPlainObject(config.wiki) && config.wiki.paths !== undefined && Array.isArray(config.wiki.paths)) {
     if (!config.wiki.paths.every((item) => typeof item === 'string')) errors.push('wiki.paths: ожидался массив строк');
+  }
+
+  if (config.projects !== undefined && !Array.isArray(config.projects)) {
+    errors.push(`projects: ожидался массив путей, получено ${typeof config.projects}`);
+  } else if (Array.isArray(config.projects) && !config.projects.every((item) => typeof item === 'string')) {
+    errors.push('projects: ожидался массив строк');
   }
 
   return { errors, warnings };

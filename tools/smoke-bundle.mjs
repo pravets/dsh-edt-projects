@@ -1,5 +1,6 @@
 // Smoke-тест бандла: одноразовый профиль DSH, установка бандла из tarball,
-// проверка композиции и живой MCP-сессии с заглушкой.
+// проверка композиции и двух живых сессий с заглушкой: в каталоге без
+// `.dsh-1c.json` плагин молчит, в каталоге с ним — подключается.
 //
 // Запуск:
 //   node tools/smoke-bundle.mjs
@@ -9,7 +10,7 @@
 //   EDT_MCP_URL   адрес заглушки; по умолчанию берётся из патча
 //   SMOKE_KEEP=1  не удалять временный DSH_HOME (для разбора)
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,15 +112,15 @@ async function main() {
   const env = { DSH_HOME: home, ...(override ? { EDT_MCP_URL: override } : {}) };
 
   // 1. Профиль headless создаётся самим CLI из шаблона.
-  console.log('\n[1/4] создаю профиль headless');
+  console.log('\n[1/5] создаю профиль headless');
   run(['headless', '--help'], { env, label: 'dsh headless --help' });
 
   // 2. Установка бандла из tarball — ровно тем же путём, что и у пользователя.
-  console.log('[2/4] устанавливаю бандл из tarball');
+  console.log('[2/5] устанавливаю бандл из tarball');
   run(['plugin', '--profile', 'headless', 'add', tarball], { env, label: 'dsh plugin add' });
 
   // 3. Композиция профиля: строка плагина правил и строка сервера должны быть в дереве.
-  console.log('[3/4] проверяю композицию профиля');
+  console.log('[3/5] проверяю композицию профиля');
   const dump = run(['--profile', 'headless', '--dump-config'], { env, label: 'dsh --dump-config' });
   const composed = `${dump.stdout}${dump.stderr}`;
   if (!composed.includes(hub.name)) fail(`в композиции профиля нет строки бандла ${hub.name}`);
@@ -133,32 +134,76 @@ async function main() {
   }
   if (!process.exitCode) console.log('  ok   правила и строка сервера попали в композицию');
 
-  // 4. Живая сессия: заглушка должна получить initialize и tools/list.
-  console.log(`[4/4] поднимаю заглушку на ${url.port} и стартую DSH`);
-  const stub = await startStubServer({ port: Number(url.port), host: url.hostname });
+  // 4. Два каталога: без 1С-настроек и с ними.
+  const projects = join(root, '.smoke', 'projects');
+  rmSync(projects, { recursive: true, force: true });
+  const plainDir = join(projects, 'plain');
+  const oneDir = join(projects, 'one-c');
+  mkdirSync(plainDir, { recursive: true });
+  mkdirSync(oneDir, { recursive: true });
+  writeFileSync(join(oneDir, '.dsh-1c.json'), `${JSON.stringify({ enabled: true }, null, 2)}\n`, 'utf8');
 
-  const boot = spawn(process.execPath, [bin, '--profile', 'headless', 'ping'], {
-    cwd: root,
-    env: { ...process.env, ...env, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ?? 'smoke-dummy-key' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let output = '';
-  boot.stdout.on('data', (c) => (output += c));
-  boot.stderr.on('data', (c) => (output += c));
+  console.log(`\n[4/5] поднимаю заглушку на ${url.port} и проверяю выключенный проект`);
+  const stub = await startStubServer({ port: Number(url.port), host: url.hostname });
+  const baseEnv = { ...process.env, ...env, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ?? 'smoke-dummy-key' };
+
+  const bootFrom = (cwd) => {
+    const child = spawn(process.execPath, [bin, '--profile', 'headless', '--json', 'ping'], {
+      cwd,
+      env: baseEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (c) => (output += c));
+    child.stderr.on('data', (c) => (output += c));
+    return { child, output: () => output };
+  };
+
+  /** Ждёт строку session из --json: сессия создана, плагин уже решал про активацию. */
+  const waitForSession = async (boot, timeoutMs = 60000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (/"type"\s*:\s*"session"/.test(boot.output())) return;
+      await new Promise((done) => setTimeout(done, 100));
+    }
+    throw new Error(`сессия не создалась за ${timeoutMs} мс\n--- вывод DSH ---\n${boot.output().slice(-3000)}`);
+  };
 
   try {
-    await stub.waitFor('initialize', 60000);
-    console.log('  ok   MCP-клиент подключился к заглушке (initialize)');
-    await stub.waitFor('tools/list', 60000);
-    console.log('  ok   инструменты запрошены (tools/list)');
-  } catch (err) {
-    fail(`${err.message}\n--- вывод DSH ---\n${output.slice(-3000)}`);
+    const quiet = bootFrom(plainDir);
+    try {
+      await waitForSession(quiet);
+      // Дать плагину шанс ошибиться и всё-таки смонтировать сервер.
+      await new Promise((done) => setTimeout(done, 3000));
+      if (stub.calls.length > 0) {
+        fail(`в выключенном проекте заглушка получила: ${[...new Set(stub.calls)].join(', ')}`);
+      } else {
+        console.log('  ok   выключенный проект: заглушка не получила ни одного запроса');
+      }
+    } finally {
+      quiet.child.kill('SIGKILL');
+    }
+
+    console.log('[5/5] проверяю включённый проект');
+    const onec = bootFrom(oneDir);
+    try {
+      await stub.waitFor('initialize', 60000);
+      console.log('  ok   включённый проект: MCP-клиент подключился к заглушке (initialize)');
+      await stub.waitFor('tools/list', 60000);
+      console.log('  ok   инструменты запрошены (tools/list)');
+    } catch (err) {
+      fail(`${err.message}\n--- вывод DSH ---\n${onec.output().slice(-3000)}`);
+    } finally {
+      onec.child.kill('SIGKILL');
+    }
   } finally {
-    boot.kill('SIGKILL');
     await stub.close();
   }
 
-  if (!process.env.SMOKE_KEEP) rmSync(home, { recursive: true, force: true });
+  if (!process.env.SMOKE_KEEP) {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(projects, { recursive: true, force: true });
+  }
 
   if (process.exitCode) {
     console.error('\nSMOKE: провал');

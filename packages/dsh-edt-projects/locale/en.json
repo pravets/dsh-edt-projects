@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "1C:EDT + BSL MCP",
-    "description": "MCP hub for 1C development: EDT is always connected; BSL Language Server (diagnostics, types, navigation) and a task tracker are mounted on demand via mcp_pin. Adds tool-selection rules to the prompt."
+    "description": "MCP hub for 1C development: active only in selected projects (.dsh-1c.json or the projects list). There EDT is connected up front, while BSL Language Server (diagnostics, types, navigation) and a task tracker are mounted on demand via edt_pin; 1C rules enter the prompt only there."
   }
 }

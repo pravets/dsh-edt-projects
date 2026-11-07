@@ -95,7 +95,33 @@ test('файлы навыков: имя совпадает с каталогом
   }
 });
 
-test('в текстах навыков нет реальных адресов и ключей проектов', () => {
+test('выключенный проект: навыков нет даже при включённых флагах', () => {
+  const provider = createSkillsProvider({
+    resolveConfig: () => ({ sonar: { enabled: true }, gitlab: { enabled: true } }),
+    isEnabled: () => false,
+  });
+  assert.deepEqual(provider.list({ cwd: 'C:\\git\\other' }), []);
+  assert.equal(provider.get({ name: 'edt-mcp-project-sonar' }, { cwd: 'C:\\git\\other' }), undefined);
+});
+
+test('isEnabled получает cwd и действующий конфиг', () => {
+  const seen = [];
+  const provider = createSkillsProvider({
+    resolveConfig: () => ({ gitlab: { enabled: true } }),
+    isEnabled: (cwd, config) => {
+      seen.push([cwd, config.gitlab.enabled]);
+      return cwd === '/enabled';
+    },
+  });
+  assert.deepEqual(provider.list({ cwd: '/enabled' }).map((skill) => skill.name), ['edt-mcp-project-gitlab']);
+  assert.deepEqual(provider.list({ cwd: '/disabled' }), []);
+  assert.deepEqual(seen, [
+    ['/enabled', true],
+    ['/disabled', true],
+  ]);
+});
+
+test('в текстах навыков нет зашитых адресов и ключей проектов', () => {
   const forbidden = [/[a-z0-9-]+\.internal\b/i, /\bgitlab\.[a-z0-9-]+\.[a-z]{2,}\b/i, /\bsq\.[a-z0-9-]+\.[a-z]{2,}\b/i];
   for (const file of walk(skillsRoot)) {
     const text = readFileSync(file, 'utf8');

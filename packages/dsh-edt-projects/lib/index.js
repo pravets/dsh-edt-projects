@@ -1,30 +1,36 @@
 // Хаб MCP-серверов для DSH: подключение по требованию, настройки на проект
 // и правила для модели.
 //
+// Плагин стоит в профиле один раз, но активируется только в выбранных проектах:
+// правила 1С, собственные инструменты и MCP-серверы появляются лишь там, где
+// проект отмечен `.dsh-1c.json`, `enabled: true` или попадает в `projects`
+// пользовательского файла (см. lib/enable.mjs). В остальных сессиях виден
+// только `edt_config`, которым проект и включается.
+//
 // Зачем: каждый подключённый сервер отдаёт свои схемы инструментов в КАЖДЫЙ
-// запрос к модели. EDT (99 инструментов) нужен постоянно, а BSL Language Server
-// и система задач — эпизодически. Поэтому сервер помечается `lazy: true` и
-// монтируется только по вызову `mcp_pin`; `mcp_unpin` возвращает контекст.
+// запрос к модели. EDT (99 инструментов) нужен постоянно в 1С-проекте, а BSL
+// Language Server и система задач — эпизодически. Поэтому серверы монтируются в
+// скоуп сессии: `lazy: true` — только по вызову `edt_pin`; незаленивые — при
+// создании сессии включённого проекта. `edt_unpin` возвращает контекст.
 //
 // Настройки: база из cordis.patch.yml <- $DSH_HOME/dsh-1c.json <- <cwd>/.dsh-1c.json.
-// Файлы перечитываются на каждый pin/рендер промпта, поэтому правки применяются
-// через mcp_reload без перезапуска DSH.
+// Файлы перечитываются на каждый pin/рендер промпта и на каждый шаг (для
+// включения на лету), поэтому правки применяются через edt_reload без
+// перезапуска DSH.
 //
-// Серверы описываются в config.servers (см. cordis.patch.yml):
-//   edt:   { shared: true, transport: streamable-http, url, headers, lazy: false }
-//   bsl:   { lazy: true, provision: true, root }   — jar берётся из env/кэша
-//   tasks: { lazy: true, transport: streamable-http, url, headers }
-//
-// `shared: true` — одна копия на процесс (EDT один workspace); остальные серверы
-// монтируются в скоуп агента, поэтому параллельные агенты в разных worktree
-// получают каждый свой BSL LS со своим корнем.
+// `shared: true` больше не работает: сервер всегда живёт в скоупе сессии, иначе
+// его инструменты протекали бы в чужие проекты.
 export const name = 'mcp-hub';
 
 export const inject = ['tools', 'workingDirectory'];
 
+/** Собственные инструменты плагина; префикс edt_ отделяет их от `mcp__edt__*`. */
+export const TOOL_NAMES = ['edt_servers', 'edt_pin', 'edt_unpin', 'edt_reload', 'edt_config'];
+
 import { watch } from 'node:fs';
 import { bslAvailable, bslSettings, ensureJar, resolveBsl, startBslSupervisor } from './bsl.mjs';
-import { projectConfigPath, resolveConfig, userConfigPath } from './config.mjs';
+import { projectConfigLoaded, projectConfigPath, resolveConfig, userConfigPath } from './config.mjs';
+import { activationFor } from './enable.mjs';
 import { normalizeWiki, targetPathOf, writeDenialReason } from './wiki.mjs';
 import { normalizeTestTooling } from './tests.mjs';
 import { initFile, upgradeFile } from './config-file.mjs';
@@ -33,7 +39,7 @@ import { createSkillsProvider } from './skills.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
-К этому профилю подключены MCP-серверы для работы с конфигурацией 1С. Правила:
+К этому проекту подключены MCP-серверы для работы с конфигурацией 1С. Правила:
 
 - Структуру, метаданные и код ищи через MCP, а не файловым поиском. Чтение файлов и \`grep\` — запасной путь, когда MCP-инструмент недоступен или уже вернул ошибку.
 - Проверяй утверждения о коде тем же инструментом, которым исследовал. Не выдавай непроверенное за проверенное.
@@ -43,12 +49,12 @@ const HEADER = `## Работа с 1С через MCP
 const PIN_RULES = `
 ### Серверы по требованию
 
-Часть серверов не подключена заранее, чтобы не занимать контекст их схемами. Посмотреть состояние — \`mcp_servers\`; подключить — \`mcp_pin(server)\`, отключить — \`mcp_unpin(server)\`.
+Часть серверов не подключена заранее, чтобы не занимать контекст их схемами. Посмотреть состояние — \`edt_servers\`; подключить — \`edt_pin(server)\`, отключить — \`edt_unpin(server)\`.
 
 - Подключай сервер сам, когда задача без него не решается: нужна диагностика или типы — \`bsl\`, нужны задачи или статусы — \`tasks\`.
-- Для \`bsl\` передавай корень: \`mcp_pin("bsl", root: "<каталог конфигурации>")\`. Без корня берётся корень из настроек проекта, иначе каталог запуска DSH.
-- Первый \`mcp_pin("bsl")\` может занять время: при отсутствии готового jar сервер скачивается (~130 МБ). Предупреди пользователя, если это долго.
-- После \`mcp_unpin\` инструменты сервера исчезают из запроса. Не отключай сервер, пока работа с ним не закончена.
+- Для \`bsl\` передавай корень: \`edt_pin("bsl", root: "<каталог конфигурации>")\`. Без корня берётся корень из настроек проекта, иначе каталог запуска DSH.
+- Первый \`edt_pin("bsl")\` может занять время: при отсутствии готового jar сервер скачивается (~130 МБ). Предупреди пользователя, если это долго.
+- После \`edt_unpin\` инструменты сервера исчезают из запроса. Не отключай сервер, пока работа с ним не закончена.
 - Если сервер помечен как не настроенный, не пытайся его подключить: скажи пользователю, чего не хватает.`;
 
 const EDT_EDIT_RULES = `
@@ -82,7 +88,7 @@ const BSL_RULES = `
 - \`type_info\` и \`global_member_info\` — свойства, методы и сигнатуры типов и глобального контекста платформы. Сверяйся с ними, а не по памяти.
 - \`definition\`, \`find_references\`, \`call_hierarchy\`, \`hover\`, \`type_at_position\`, \`document_symbols\` — навигация. Перед изменением метода посмотри \`call_hierarchy\` или \`find_references\`.
 - Позиции в \`line\`/\`character\` нумеруются с нуля.
-- Файлы вне рабочего каталога сервера дают \`File is not part of any registered workspace\`. Тогда переподключи сервер с нужным корнем: \`mcp_pin("bsl", root: "<каталог конфигурации>")\` — путь проекта видно в \`edt__list_projects\`.`;
+- Файлы вне рабочего каталога сервера дают \`File is not part of any registered workspace\`. Тогда переподключи сервер с нужным корнем: \`edt_pin("bsl", root: "<каталог конфигурации>")\` — путь проекта видно в \`edt__list_projects\`.`;
 
 const TASKS_RULES = `
 ### Система задач (\`tasks__*\`)
@@ -199,7 +205,6 @@ export function normalizeServers(config = {}) {
       transport,
       lazy: raw.lazy === true,
       unavailable: raw.unavailable === true,
-      shared: raw.shared === true,
       raw,
     });
   }
@@ -269,8 +274,23 @@ const textTool = (toolName, description, parameters, execute) => ({
   execute,
 });
 
-/** Подпись конфигурации для обнаружения изменений при mcp_reload. */
+/** Подпись конфигурации для обнаружения изменений при edt_reload. */
 const signatureOf = (entry, root) => JSON.stringify({ config: mountConfig(entry), root });
+
+const activationReason = (activation) => {
+  switch (activation.reason) {
+    case 'enabled':
+      return 'enabled: true в настройках';
+    case 'disabled':
+      return 'enabled: false в настройках';
+    case 'project-file':
+      return 'есть .dsh-1c.json проекта';
+    case 'allowlist':
+      return `путь в projects (${activation.entry})`;
+    default:
+      return 'проект не выбран: нет .dsh-1c.json и его нет в projects';
+  }
+};
 
 /**
  * Каталог, от которого считаются настройки проекта, корень BSL и пути вики.
@@ -299,11 +319,12 @@ export async function apply(ctx, config) {
   const agentStates = new WeakMap();
   const watchedProjects = new Set();
   const loggedErrors = new Set();
+  let skillsControl;
 
   const cwdOf = (agent) => sessionCwd(agent, ctx.workingDirectory);
 
-  const effectiveFor = (agent) => {
-    const effective = resolveConfig({ cwd: cwdOf(agent), env: process.env, base });
+  const effectiveForCwd = (cwd) => {
+    const effective = resolveConfig({ cwd, env: process.env, base });
     for (const error of effective.errors) {
       if (loggedErrors.has(error)) continue;
       loggedErrors.add(error);
@@ -311,6 +332,13 @@ export async function apply(ctx, config) {
     }
     return effective;
   };
+
+  const effectiveFor = (agent) => effectiveForCwd(cwdOf(agent));
+
+  const activationOfCwd = (cwd) =>
+    activationFor({ cwd, config: effectiveForCwd(cwd).config, hasProjectFile: projectConfigLoaded(cwd) });
+
+  const activationOf = (agent) => activationOfCwd(cwdOf(agent));
 
   const entriesFor = (effective) => {
     const bsl = bslSettingsFor(effective);
@@ -324,22 +352,23 @@ export async function apply(ctx, config) {
     });
   };
 
-  const mapFor = (agent, shared) => {
-    if (shared) return globalState;
-    if (agent === undefined) return globalState;
-    let map = agentStates.get(agent);
-    if (map === undefined) {
-      map = new Map();
-      agentStates.set(agent, map);
+  /** Состояние активации одного агента (сессии): инструменты и смонтированные серверы. */
+  const stateOf = (agent) => {
+    let state = agentStates.get(agent);
+    if (state === undefined) {
+      state = { active: false, disposers: [], items: new Map() };
+      agentStates.set(agent, state);
     }
-    return map;
+    return state;
   };
 
+  const mapFor = (agent) => (agent === undefined ? globalState : stateOf(agent).items);
+
   const itemFor = (agent, entry) => {
-    const map = mapFor(agent, entry.shared);
+    const map = mapFor(agent);
     let item = map.get(entry.name);
     if (item === undefined) {
-      item = { entry, fiber: null, error: null, supervisor: null, signature: undefined };
+      item = { entry, fiber: null, error: null, supervisor: null, signature: undefined, suppressed: false };
       map.set(entry.name, item);
     } else {
       item.entry = entry;
@@ -347,10 +376,13 @@ export async function apply(ctx, config) {
     return item;
   };
 
-  const toolNamesOf = (serverName) => {
+  const toolNamesOf = (agent, serverName) => {
     const prefix = `mcp__${serverName}__`;
     try {
-      return [...ctx.tools.view(undefined).visible.keys()].filter((toolName) => toolName.startsWith(prefix));
+      return ctx.tools
+        .schemas(agent === undefined ? undefined : agent)
+        .map((schema) => schema.name)
+        .filter((toolName) => toolName.startsWith(prefix));
     } catch {
       return [];
     }
@@ -359,8 +391,7 @@ export async function apply(ctx, config) {
   const snapshot = (agent) => {
     const effective = effectiveFor(agent);
     return entriesFor(effective).map((entry) => {
-      const map = mapFor(agent, entry.shared);
-      const item = map.get(entry.name);
+      const item = mapFor(agent).get(entry.name);
       let value = 'lazy';
       if (entry.unavailable) value = 'unavailable';
       if (item?.fiber && !item.error) value = 'mounted';
@@ -368,11 +399,11 @@ export async function apply(ctx, config) {
       return {
         name: entry.name,
         state: value,
-        scope: entry.shared ? 'shared' : agent === undefined ? 'global' : 'agent',
+        scope: agent === undefined ? 'global' : 'session',
         transport: item?.supervisor ? 'lsp+mcp' : entry.transport,
         root: item?.supervisor?.root ?? entry.raw?.root,
         endpoint: item?.supervisor?.url ?? entry.raw?.url,
-        tools: toolNamesOf(entry.name).length,
+        tools: toolNamesOf(agent, entry.name).length,
         error: item?.error,
       };
     });
@@ -383,7 +414,7 @@ export async function apply(ctx, config) {
       await item.fiber.dispose().catch(() => {});
       item.fiber = null;
     }
-    await item.supervisor?.stop();
+    await Promise.resolve(item.supervisor?.stop?.()).catch(() => {});
     item.supervisor = null;
     item.error = null;
     item.signature = undefined;
@@ -406,7 +437,10 @@ export async function apply(ctx, config) {
 
     if (item.fiber && !item.error) {
       const sameRoot = item.supervisor === null || item.supervisor?.root === root;
-      if (sameRoot) return { already: true, tools: toolNamesOf(serverName).length };
+      if (sameRoot) {
+        item.suppressed = false;
+        return { already: true, tools: toolNamesOf(agent, serverName).length };
+      }
       await disposeItem(item);
     }
 
@@ -425,6 +459,13 @@ export async function apply(ctx, config) {
           const jar = await ensureJar(bsl, { log, warn });
           const supervisor = await startBslSupervisor({ jar, java: bsl.java, root, port: bsl.port, log });
           item.supervisor = supervisor;
+          // Процесс BSL LS должен умереть вместе со скоупом агента, даже если
+          // disposeItem не вызвали (сессия закрыта, плагин выгружен).
+          if (agent !== undefined) {
+            agent.ctx.effect(() => () => {
+              Promise.resolve(supervisor.stop()).catch(() => {});
+            });
+          }
           resolved = { transport: 'streamable-http', url: supervisor.url };
         }
         resolvedEntry = {
@@ -439,33 +480,39 @@ export async function apply(ctx, config) {
         };
       } catch (error) {
         item.error = error instanceof Error ? error.message : String(error);
-        await item.supervisor?.stop();
+        await Promise.resolve(item.supervisor?.stop?.()).catch(() => {});
         item.supervisor = null;
         return { already: false, tools: 0, error: item.error };
       }
     }
 
     const McpClient = await import('@deepseek-ai/dsh-mcp-client');
-    const scopeCtx = entry.shared || agent === undefined ? ctx : agent.ctx;
+    const scopeCtx = agent === undefined ? ctx : agent.ctx;
     const fiber = scopeCtx.plugin(McpClient, mountConfig(resolvedEntry));
     item.fiber = fiber;
     item.error = null;
     item.signature = signatureOf(resolvedEntry, root);
+    item.suppressed = false;
     try {
       await fiber;
     } catch (error) {
       item.error = error instanceof Error ? error.message : String(error);
     }
-    return { already: false, tools: toolNamesOf(serverName).length, error: item.error };
+    return { already: false, tools: toolNamesOf(agent, serverName).length, error: item.error };
   };
 
   const unmount = async (agent, serverName) => {
     const effective = effectiveFor(agent);
     const entry = entriesFor(effective).find((candidate) => candidate.name === serverName);
-    const map = entry === undefined ? mapFor(agent, false) : mapFor(agent, entry.shared);
+    const map = mapFor(agent);
     const item = map.get(serverName);
-    if (item === undefined || !item.fiber) return false;
+    if (item === undefined || !item.fiber) {
+      if (entry !== undefined && item !== undefined) item.suppressed = true;
+      return false;
+    }
     await disposeItem(item);
+    // Незаленивый сервер иначе смонтируется снова на следующем шаге.
+    item.suppressed = true;
     return true;
   };
 
@@ -480,8 +527,7 @@ export async function apply(ctx, config) {
 
     const changed = [];
     for (const entry of targets) {
-      const map = mapFor(agent, entry.shared);
-      const item = map.get(entry.name);
+      const item = mapFor(agent).get(entry.name);
       if (item === undefined || !item.fiber) continue;
       const bsl = bslSettingsFor(effective);
       const root = entry.raw.root ?? bsl.root;
@@ -496,7 +542,98 @@ export async function apply(ctx, config) {
 
   // Если плагин выгружают, процессы серверов не должны остаться висеть.
   ctx.effect(() => () => {
-    for (const item of globalState.values()) item.supervisor?.stop();
+    for (const item of globalState.values()) Promise.resolve(item.supervisor?.stop?.()).catch(() => {});
+  });
+
+  // --- активация на проект ----------------------------------------------------
+  const invalidateSkills = () => {
+    try {
+      skillsControl?.invalidate?.();
+    } catch {
+      // Инвалидация каталога — вспомогательная операция, не валим шаг.
+    }
+  };
+
+  const watchFile = (path) => {
+    if (path === undefined || watchedProjects.has(path)) return;
+    watchedProjects.add(path);
+    try {
+      const watcher = watch(path, { persistent: false }, () => {
+        invalidateSkills();
+        ctx.logger?.warn?.(`mcp-hub: настройки изменились (${path}). Примените их через edt_reload.`);
+      });
+      watcher.on('error', () => {});
+      ctx.effect(() => () => watcher.close());
+    } catch {
+      // Файла может ещё не быть — наблюдение не критично.
+    }
+  };
+
+  const activate = async (agent) => {
+    const state = stateOf(agent);
+    if (state.active) return;
+    state.active = true;
+    for (const definition of [serversTool(), pinTool(), unpinTool(), reloadTool()]) {
+      state.disposers.push(agent.ctx.tools.register(definition));
+    }
+    watchFile(projectConfigPath(cwdOf(agent)));
+
+    const effective = effectiveFor(agent);
+    for (const entry of entriesFor(effective)) {
+      if (entry.lazy || entry.unavailable) continue;
+      try {
+        await mount(agent, entry.name);
+      } catch (error) {
+        ctx.logger?.warn?.(`mcp-hub: ${entry.name} failed to mount: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
+
+  const deactivate = async (agent) => {
+    const state = agentStates.get(agent);
+    if (state === undefined || !state.active) return;
+    state.active = false;
+    for (const dispose of state.disposers.splice(0)) {
+      try {
+        dispose();
+      } catch {
+        // Инструменты могли быть уже сняты выгрузкой скоупа.
+      }
+    }
+    for (const item of state.items.values()) await disposeItem(item);
+    state.items.clear();
+  };
+
+  /**
+   * Сводит состояние сессии с текущими настройками: включает проект на лету
+   * после edt_config init/правки файла и выключает после enabled:false.
+   */
+  const reconcile = async (agent) => {
+    if (agent === undefined) return;
+    const { enabled } = activationOf(agent);
+    const state = agentStates.get(agent);
+    if (enabled) {
+      if (state === undefined || !state.active) await activate(agent);
+      return;
+    }
+    await deactivate(agent);
+  };
+
+  ctx.on('agent/created', async ({ agent }) => {
+    try {
+      await reconcile(agent);
+    } catch (error) {
+      ctx.logger?.warn?.(`mcp-hub: активация для сессии не удалась: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
+  ctx.on('agent/pre-step', async ({ agent }, next) => {
+    try {
+      await reconcile(agent);
+    } catch (error) {
+      ctx.logger?.warn?.(`mcp-hub: активация для сессии не удалась: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return next();
   });
 
   // --- вики: чтение разрешено, запись отклоняется ---
@@ -509,10 +646,10 @@ export async function apply(ctx, config) {
     return writeDenialReason(exec.name, target, roots, { cwd });
   });
 
-  ctx.tools.register(
+  const serversTool = () =>
     textTool(
-      'mcp_servers',
-      'List MCP servers: state (mounted, lazy, unavailable, failed), scope, transport, tool count, workspace root and endpoint. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
+      'edt_servers',
+      'List MCP servers of the 1C plugin: state (mounted, lazy, unavailable, failed), scope, transport, tool count, workspace root and endpoint. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
       {},
       async (_args, exec) => {
         const rows = snapshot(exec?.agent).map((item) => {
@@ -527,11 +664,10 @@ export async function apply(ctx, config) {
         });
         return { text: rows.length > 0 ? rows.join('\n') : 'No MCP servers are configured.' };
       },
-    ),
-  );
+    );
 
   const serverParam = {
-    server: { type: 'string', description: 'Server name as reported by mcp_servers.', required: true },
+    server: { type: 'string', description: 'Server name as reported by edt_servers.', required: true },
     root: {
       type: 'string',
       description:
@@ -540,50 +676,48 @@ export async function apply(ctx, config) {
     mode: { type: 'string', description: 'For a provisioned server: "hybrid" (LSP+MCP with workspace roots, default) or "stdio".' },
   };
 
-  ctx.tools.register(
+  const pinTool = () =>
     textTool(
-      'mcp_pin',
+      'edt_pin',
       'Mount a configured MCP server now, so its tools appear in this session. Re-reads the settings files first, so edited ports or roots apply without restarting DSH.',
       serverParam,
       async (args, exec) => {
         const result = await mount(exec?.agent, args.server, { root: args.root, mode: args.mode });
-        if (result.error) throw new Error(`mcp_pin(${args.server}) failed: ${result.error}`);
+        if (result.error) throw new Error(`edt_pin(${args.server}) failed: ${result.error}`);
         if (result.already) return { text: `${args.server} is already mounted (${result.tools} tools).` };
         return { text: `${args.server} mounted (${result.tools} tools). They are available from the next step.` };
       },
-    ),
-  );
+    );
 
-  ctx.tools.register(
+  const unpinTool = () =>
     textTool(
-      'mcp_unpin',
+      'edt_unpin',
       'Unmount a mounted MCP server and remove its tools from the session, freeing prompt space. Do not unmount a server while work with it is in progress.',
       { server: serverParam.server },
       async (args, exec) => {
         const wasMounted = await unmount(exec?.agent, args.server);
         return { text: wasMounted ? `${args.server} unmounted.` : `${args.server} was not mounted.` };
       },
-    ),
-  );
+    );
 
-  ctx.tools.register(
+  const reloadTool = () =>
     textTool(
-      'mcp_reload',
+      'edt_reload',
       'Re-read the settings files ($DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json) and restart mounted servers whose url, headers, command or root changed. Use after editing a settings file; no DSH restart needed.',
       { server: { type: 'string', description: 'Only this server; omit to check every configured server.' } },
       async (args, exec) => {
+        invalidateSkills();
         const changed = await reload(exec?.agent, args.server);
         if (changed.length === 0) return { text: 'Настройки перечитаны, изменений в подключённых серверах нет.' };
         const rows = changed.map((item) => `${item.name}: ${item.error === undefined ? 'перезапущен' : `ошибка — ${item.error}`}`);
         return { text: `Настройки перечитаны:\n${rows.join('\n')}` };
       },
-    ),
-  );
+    );
 
-  ctx.tools.register(
+  const configTool = () =>
     textTool(
-      'mcp_config',
-      'Inspect or maintain the settings file. action=show prints the effective settings, their sources and validation warnings; init creates the file with defaults (refuses when it exists); upgrade adds only missing keys, keeping your values; validate reports type errors and unknown keys.',
+      'edt_config',
+      'Manage dsh-edt-projects settings: which projects enable the 1C plugin (enabled/projects), wiki paths, test tooling, MCP servers and bundled skills. action=show prints the effective settings, their sources, whether this project is enabled and validation warnings; init creates the project .dsh-1c.json (which enables the plugin for it); upgrade adds only missing keys, keeping your values; validate reports type errors and unknown keys.',
       {
         action: {
           type: 'string',
@@ -597,12 +731,14 @@ export async function apply(ctx, config) {
       async (args, exec) => {
         const cwd = cwdOf(exec?.agent);
         const path = args.scope === 'user' ? userConfigPath(process.env) : projectConfigPath(cwd);
-        if (path === undefined) throw new Error('mcp_config: cannot resolve the settings path');
+        if (path === undefined) throw new Error('edt_config: cannot resolve the settings path');
 
         if (args.action === 'show') {
           const effective = effectiveFor(exec?.agent);
           const { errors, warnings } = validateConfig(effective.config);
+          const activation = activationOf(exec?.agent);
           const head = [
+            `Проект: ${activation.enabled ? 'включён' : 'выключен'} — ${activationReason(activation)}`,
             `Источники: ${effective.sources.length > 0 ? effective.sources.join(', ') : 'только cordis.patch.yml'}`,
             `Действующие настройки:\n${stringifyConfig(effective.config)}`,
           ];
@@ -614,15 +750,21 @@ export async function apply(ctx, config) {
         if (args.action === 'init') {
           const created = initFile(path);
           if (created.status === 'exists') return { text: `${path} уже существует — используйте action=upgrade, чтобы дополнить его.` };
-          if (created.status === 'error') throw new Error(`mcp_config init: ${created.error}`);
-          return { text: `Создан ${path} со значениями по умолчанию. Дальше впишите пути вики, корень конфигурации и флаги тестов.` };
+          if (created.status === 'error') throw new Error(`edt_config init: ${created.error}`);
+          invalidateSkills();
+          const hint =
+            args.scope === 'user'
+              ? 'Дальше впишите пути проектов в projects, чтобы включить плагин там.'
+              : 'Проект включён со следующего шага: появятся правила 1С и mcp__edt__*.';
+          return { text: `Создан ${path}. ${hint}` };
         }
 
         if (args.action === 'upgrade') {
           const dryRun = args.dryRun !== false;
           const result = upgradeFile(path, { dryRun });
-          if (result.status === 'error') throw new Error(`mcp_config upgrade: ${result.error}`);
+          if (result.status === 'error') throw new Error(`edt_config upgrade: ${result.error}`);
           if (result.status === 'noop') return { text: `${path}: актуален, добавлять нечего.` };
+          if (!dryRun) invalidateSkills();
           const lines = [`${path}: ${dryRun ? 'будет добавлено' : 'добавлено'} ${result.added.length} ключ(ей):`];
           for (const key of result.added) lines.push(`  + ${key}`);
           if (dryRun) lines.push('Это был предварительный просмотр. Повторите с dryRun: false, чтобы записать.');
@@ -640,35 +782,25 @@ export async function apply(ctx, config) {
         for (const warning of warnings) lines.push(`  ! ${warning}`);
         return { text: lines.join('\n') };
       },
-    ),
-  );
+    );
+
+  // edt_config остаётся глобальным: это единственная точка входа, которой
+  // включают проект, поэтому он не может зависеть от активации.
+  ctx.tools.register(configTool());
 
   // --- навыки, поставляемые с бандлом ---
-  // Навык появляется в каталоге только когда включён в конфиге проекта:
-  // list() провайдера возвращает пустой список при выключенном флаге.
+  // Провайдер глобальный, но отдаёт навыки только для включённого проекта;
+  // инвалидация каталога при правке настроек — через control.invalidate().
   ctx.inject(['skills'], (inner) => {
-    inner.skills.registerProvider(() =>
-      createSkillsProvider({
+    inner.skills.registerProvider((control) => {
+      skillsControl = control;
+      return createSkillsProvider({
         resolveConfig: (cwd) => resolveConfig({ cwd: cwd ?? process.cwd(), env: process.env, base }).config,
+        isEnabled: (cwd, config) => activationFor({ cwd, config, hasProjectFile: projectConfigLoaded(cwd) }).enabled,
         logger: ctx.logger,
-      }),
-    );
-  });
-
-  // --- наблюдение за файлами настроек ---
-  const watchFile = (path) => {
-    if (path === undefined || watchedProjects.has(path)) return;
-    watchedProjects.add(path);
-    try {
-      const watcher = watch(path, { persistent: false }, () => {
-        ctx.logger?.warn?.(`mcp-hub: настройки изменились (${path}). Примените их через mcp_reload.`);
       });
-      watcher.on('error', () => {});
-      ctx.effect(() => () => watcher.close());
-    } catch {
-      // Файла может ещё не быть — наблюдение не критично.
-    }
-  };
+    });
+  });
 
   watchFile(userConfigPath(process.env));
   watchFile(projectConfigPath(cwdOf(undefined)));
@@ -680,25 +812,13 @@ export async function apply(ctx, config) {
       interpolate: false,
       text: (context) => {
         const agent = context?.agent;
+        // В выключенном проекте секция пустая: renderPrompt выбрасывает её,
+        // поэтому в промпте не остаётся ни строчки про 1С.
+        if (agent === undefined || !activationOf(agent).enabled) return '';
         const effective = effectiveFor(agent);
         const { roots } = normalizeWiki(effective.config?.wiki, { cwd: cwdOf(agent) });
         return buildRulesText(process.env, snapshot(agent), roots, effective.config?.tests);
       },
     });
   });
-
-  // Серверы без `lazy` подключаются на старте и ЖДУТСЯ: иначе их инструменты
-  // опаздывают к первому запросу и модель видит пустой набор MCP.
-  // Ошибка подключения не валит загрузку: сервер останется в состоянии failed,
-  // а mcp-client продолжит реконнект в фоне.
-  const eager = entriesFor(effectiveFor(undefined)).filter((entry) => !entry.lazy && !entry.unavailable);
-  await Promise.all(
-    eager.map(async (entry) => {
-      try {
-        await mount(undefined, entry.name);
-      } catch (error) {
-        ctx.logger?.warn?.(`mcp-hub: ${entry.name} failed to mount: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }),
-  );
 }

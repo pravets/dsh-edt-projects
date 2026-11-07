@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import {
   clearConfigCache,
   mergeLayers,
+  projectConfigLoaded,
   projectConfigPath,
   readJsonConfig,
   resolveConfig,
@@ -108,4 +109,23 @@ test('пути файлов настроек', () => {
   assert.equal(userConfigPath({ DSH_HOME: 'C:\\dsh' }), join('C:\\dsh', 'dsh-1c.json'));
   assert.equal(projectConfigPath('C:\\proj'), join('C:\\proj', '.dsh-1c.json'));
   assert.equal(projectConfigPath(''), undefined);
+});
+
+test('projectConfigLoaded: только существующий и разбираемый файл включает проект', () => {
+  clearConfigCache();
+  const empty = tempDir();
+  assert.equal(projectConfigLoaded(empty), false, 'файла нет');
+  assert.equal(projectConfigLoaded(undefined), false);
+
+  const valid = tempDir();
+  writeJson(join(valid, '.dsh-1c.json'), {});
+  assert.equal(projectConfigLoaded(valid), true, 'пустой объект — уже включение');
+
+  const broken = tempDir();
+  writeFileSync(join(broken, '.dsh-1c.json'), '{ битый', 'utf8');
+  assert.equal(projectConfigLoaded(broken), false, 'битый JSON не включает 1С-режим');
+
+  const array = tempDir();
+  writeFileSync(join(array, '.dsh-1c.json'), '[]', 'utf8');
+  assert.equal(projectConfigLoaded(array), false, 'массив вместо объекта — тоже ошибка');
 });

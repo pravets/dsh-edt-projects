@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
 import { DEFAULTS } from '../packages/dsh-edt-projects/lib/schema.mjs';
+import { TOOL_NAMES } from '../packages/dsh-edt-projects/lib/index.js';
 
 // `yaml` подключается как CommonJS, поэтому берём его default-экспорт.
 const { parse: parseYaml } = YAML;
@@ -189,7 +190,7 @@ if (patchPath && existsSync(patchPath)) {
           const names = Object.keys(servers);
           const lazy = names.filter((name) => servers[name]?.lazy === true);
           const eager = names.filter((name) => servers[name]?.lazy !== true && servers[name]?.unavailable === undefined);
-          if (eager.length === 0) fail(`cordis.patch.yml: ни один сервер не подключается сразу (${names.join(', ')}) — в сессии не будет MCP-инструментов до mcp_pin`);
+          if (eager.length === 0) fail(`cordis.patch.yml: ни один сервер не подключается сразу (${names.join(', ')}) — в сессии не будет MCP-инструментов до edt_pin`);
           else pass(`mcp-hub: ${names.length} сервер(а), сразу: ${eager.join(', ')}${lazy.length ? `, по требованию: ${lazy.join(', ')}` : ''}`);
         }
       }
@@ -299,6 +300,21 @@ if (!existsSync(skillsDir)) {
   const listed = (manifest?.files ?? []).some((entry) => entry === 'skills' || entry.startsWith('skills/'));
   if (!listed) fail('package.json: skills не указан в files — навыки не попадут в tarball');
   else pass(`skills: ${dirs.length} навык(а), адреса не зашиты`);
+}
+
+// --- имена собственных инструментов ---------------------------------------
+// Префикс edt_ отделяет их от `mcp__edt__*` сервера EDT и от чужих MCP-плагинов;
+// старые mcp_* имена не должны вернуться.
+if (!Array.isArray(TOOL_NAMES) || TOOL_NAMES.length === 0) {
+  fail('lib/index.js: не экспортирован TOOL_NAMES');
+} else {
+  const wrong = TOOL_NAMES.filter((toolName) => !/^edt_[a-z0-9_]+$/.test(toolName));
+  const legacy = TOOL_NAMES.filter((toolName) => /^mcp_/.test(toolName));
+  const duplicates = TOOL_NAMES.filter((toolName, index) => TOOL_NAMES.indexOf(toolName) !== index);
+  if (wrong.length > 0) fail(`TOOL_NAMES: имена без префикса edt_: ${wrong.join(', ')}`);
+  else if (legacy.length > 0) fail(`TOOL_NAMES: остались старые mcp_* имена: ${legacy.join(', ')}`);
+  else if (duplicates.length > 0) fail(`TOOL_NAMES: дубликаты: ${duplicates.join(', ')}`);
+  else pass(`TOOL_NAMES: ${TOOL_NAMES.length} инструмент(а) с префиксом edt_`);
 }
 
 // --- иконка ----------------------------------------------------------------

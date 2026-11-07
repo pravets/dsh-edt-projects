@@ -1,7 +1,7 @@
 // Слои настроек бандла: база из патча, пользовательский файл и файл проекта.
 //
 // Приоритет: проект > пользователь > база. Файлы перечитываются на каждый
-// mcp_pin/mcp_reload и на каждый рендер промпта, поэтому правки применяются
+// edt_pin/edt_reload и на каждый рендер промпта, поэтому правки применяются
 // без перезапуска DSH; разбор кэшируется по mtimeMs.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -90,6 +90,17 @@ export function resolveConfig({ cwd, env = process.env, base = {} } = {}) {
   if (project.config !== undefined && projectPath !== undefined) sources.push(projectPath);
 
   return { config: mergeLayers(base, user.config, project.config), sources, errors };
+}
+
+/**
+ * Есть ли у проекта разбираемый файл `.dsh-1c.json`.
+ * Наличие самого файла при включении плагина учитывается только вместе с
+ * успешным разбором: битый JSON не должен включать 1С-режим.
+ */
+export function projectConfigLoaded(cwd) {
+  const path = projectConfigPath(cwd);
+  if (path === undefined) return false;
+  return readJsonConfig(path).config !== undefined;
 }
 
 /** Сбрасывает кэш — используется тестами. */

@@ -1,20 +1,29 @@
 # Хаб MCP-серверов для разработки на 1С.
 #
-# Серверы описываются здесь и подключаются плагином mcp-hub (lib/index.js):
-#   - `lazy: true`      — не занимать контекст: сервер монтируется по вызову mcp_pin
-#   - `provision: true` — параметры запуска добираются на mcp_pin (BSL LS скачивается)
-#   - `shared: true`    — одна копия на процесс; остальные серверы монтируются
-#                         в скоуп агента (параллельные worktree не мешают друг другу)
-#   - `unavailable`     — сервер описан, но настроить его нечем (mcp_pin объяснит, чем)
+# Плагин стоит в профиле один раз, но активируется только в выбранных проектах:
+#   - сессия в каталоге с `.dsh-1c.json` — включена;
+#   - каталог добавлен в `projects` файла $DSH_HOME/dsh-1c.json — включена;
+#   - `enabled: true`/`enabled: false` — явное решение сильнее всего.
+# В выключенном проекте виден только `edt_config`; в остальных сессиях ни правил
+# 1С, ни MCP-серверов нет.
+#
+# Серверы описываются здесь и подключаются плагином mcp-hub (lib/index.js) в
+# скоупе сессии:
+#   - `lazy: true`      — не занимать контекст: сервер монтируется по вызову edt_pin
+#   - `provision: true` — параметры запуска добираются на edt_pin (BSL LS скачивается)
+#   - `unavailable`     — сервер описан, но настроить его нечем (edt_pin объяснит, чем)
+# `shared` больше не работает: иначе инструменты сервера протекали бы в чужие
+# проекты.
 #
 # Настройки можно переопределить без перезапуска DSH — файлами
 # $DSH_HOME/dsh-1c.json (пользователь) и <cwd>/.dsh-1c.json (проект):
-#   { "wiki": { "paths": ["C:\\git\\dev-llm-wiki"], "entry": "wiki/index.md" },
+#   { "projects": ["C:\\git\\trade"],
+#     "wiki": { "paths": ["C:\\git\\dev-llm-wiki"], "entry": "wiki/index.md" },
 #     "servers": { "edt": { "url": "http://127.0.0.1:8765/mcp" },
 #                  "bsl": { "root": "C:\\git\\trade\\src\\cf" } },
 #     "tests": { "yaxunit": { "enabled": true, "path": "tests/yaxunit", "project": "cfe_yaxunit" },
 #                "vanessa": { "enabled": true, "path": "features" } } }
-# После правки файла: mcp_reload (или mcp_pin заново).
+# После правки файла: edt_reload (или edt_pin заново).
 # Флаги tests включают правила тестируемости: YAxUnit — закладывать тестируемость
 # и писать тесты в указанный проект, Vanessa — предлагать сценарные тесты.
 #
@@ -44,9 +53,9 @@
           paths: !!js 'process.env.DSH_1C_WIKI ? process.env.DSH_1C_WIKI.split(";").filter(Boolean) : []'
           entry: !!js 'process.env.DSH_1C_WIKI_ENTRY ?? ""'
         servers:
-          # EDT один на процесс: одна копия, чтобы агенты не поднимали лишние сессии.
+          # EDT монтируется в каждой включённой сессии: это отдельное HTTP-
+          # подключение, а не отдельный workspace в EDT.
           edt:
-            shared: true
             lazy: false
             transport: streamable-http
             url: !!js 'process.env.EDT_MCP_URL ?? "http://127.0.0.1:8765/mcp"'
@@ -62,7 +71,7 @@
               maxAttempts: 1000
 
           # BSL Language Server: 10 инструментов, нужны эпизодически.
-          # provision: на mcp_pin берётся готовый jar из DSH_1C_BSL_LS_JAR, иначе из
+          # provision: на edt_pin берётся готовый jar из DSH_1C_BSL_LS_JAR, иначе из
           # кэша, иначе скачивается последний релиз с GitHub (sha256 сверяется).
           # Корень по умолчанию — servers.bsl.root из файла настроек проекта.
           bsl:

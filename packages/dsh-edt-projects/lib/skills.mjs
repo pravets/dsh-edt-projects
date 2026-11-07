@@ -63,13 +63,22 @@ export function skillFile(name) {
 /**
  * Создаёт провайдер навыков.
  * @param options.resolveConfig вызывается с cwd и возвращает действующий конфиг.
+ * @param options.isEnabled вызывается с (cwd, config) и говорит, активирован ли
+ *   плагин для этого проекта; для выключенного проекта навыков нет.
  * @param options.logger необязательный логгер для предупреждений.
  */
-export function createSkillsProvider({ resolveConfig, logger } = {}) {
+export function createSkillsProvider({ resolveConfig, isEnabled, logger } = {}) {
   const read = (name) => {
     const path = skillFile(name);
     if (!existsSync(path)) return undefined;
     return { path, ...parseFrontmatter(readFileSync(path, 'utf8')) };
+  };
+
+  const configFor = (cwd) => (typeof resolveConfig === 'function' ? resolveConfig(cwd) : {}) ?? {};
+
+  const allowed = (cwd) => {
+    if (typeof isEnabled !== 'function') return true;
+    return isEnabled(cwd, configFor(cwd)) === true;
   };
 
   const toCandidate = (name) => {
@@ -91,7 +100,9 @@ export function createSkillsProvider({ resolveConfig, logger } = {}) {
     name: 'edt-mcp-bundle-skills',
     /** Отдаёт только навыки, включённые в конфиге проекта. */
     list(options = {}) {
-      const config = typeof resolveConfig === 'function' ? resolveConfig(options.cwd) : {};
+      const cwd = options.cwd ?? process.cwd();
+      if (!allowed(cwd)) return [];
+      const config = configFor(cwd);
       const candidates = [];
       for (const skill of SKILLS) {
         if (!skill.enabled(config)) continue;
@@ -105,7 +116,8 @@ export function createSkillsProvider({ resolveConfig, logger } = {}) {
       return candidates;
     },
     /** Возвращает тело навыка без frontmatter. */
-    get(candidate) {
+    get(candidate, options = {}) {
+      if (!allowed(options.cwd ?? process.cwd())) return undefined;
       const parsed = read(candidate?.name);
       if (parsed === undefined) return undefined;
       return {
