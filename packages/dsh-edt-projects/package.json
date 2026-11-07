@@ -1,8 +1,8 @@
 {
   "name": "dsh-edt-projects",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "type": "module",
-  "description": "MCP hub for 1C development: EDT always on, BSL Language Server started in LSP+MCP mode with workspace roots, task tracker via mcp_pin, bundled SonarQube and GitLab skills, with model-facing usage rules",
+  "description": "Project-scoped MCP hub for 1C development: active only in selected projects, EDT connected up front there, BSL Language Server and a task tracker mounted on demand, bundled SonarQube and GitLab skills, with model-facing usage rules",
   "license": "MIT",
   "repository": {
     "type": "git",
