@@ -1,6 +1,8 @@
 # dsh-edt-projects
 
 [![CI](https://github.com/pravets/dsh-edt-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/pravets/dsh-edt-projects/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/pravets/dsh-edt-projects)](https://github.com/pravets/dsh-edt-projects/blob/master/LICENSE)
+[![Telegram](https://telegram-badge.vercel.app/api/telegram-badge?channelId=@pravets_IT)](https://t.me/+GKGRmAwghxllYzIy)
 
 Плагин [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) для
 разработки на 1С. Держит подключённым **1C:EDT** через
