@@ -89,3 +89,31 @@ export function activationFor({ cwd, config, hasProjectFile = false } = {}, opti
 export function isEnabledFor(input, options = {}) {
   return activationFor(input, options).enabled;
 }
+
+/**
+ * Активация с учётом путей worktree.
+ *
+ * Обычная проверка идёт от каталога сессии. Для worktree дополнительно
+ * проверяются его корень и основной checkout: запись `projects` может называть
+ * основной checkout, а файл `.dsh-1c.json` может лежать только в нём (не
+ * закоммичен). Сильнее всего остаётся `enabled` из объединённых настроек.
+ * @param input.cwd каталог сессии (может быть корнем task space).
+ * @param input.paths дополнительные пути: корень worktree, основной checkout.
+ */
+export function activationForPaths({ cwd, config, hasProjectFile = false, paths = [] } = {}, options = {}) {
+  const direct = activationFor({ cwd, config, hasProjectFile }, options);
+  if (direct.reason !== 'not-selected') return direct;
+
+  const projects = Array.isArray(config?.projects) ? config.projects : [];
+  const seen = new Set([normalizeProjectPath(cwd, options)]);
+  for (const candidate of paths) {
+    const key = normalizeProjectPath(candidate, options);
+    if (key === undefined || seen.has(key)) continue;
+    seen.add(key);
+    const entry = projects.find((item) => matchesProject(candidate, item, options));
+    if (entry !== undefined) {
+      return { enabled: true, reason: 'allowlist', entry, path: candidate, inherited: true };
+    }
+  }
+  return direct;
+}

@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { activationFor, isEnabledFor, matchesProject, normalizeProjectPath } from '../packages/dsh-edt-projects/lib/enable.mjs';
+import { activationFor, activationForPaths, isEnabledFor, matchesProject, normalizeProjectPath } from '../packages/dsh-edt-projects/lib/enable.mjs';
 
 const home = 'C:\\Users\\dev';
 const win = { platform: 'win32', home };
@@ -78,4 +78,53 @@ test('проект ищется от исходного каталога: вло
   const config = { projects: ['/home/dev/trade'] };
   assert.equal(activationFor({ cwd: '/home/dev/trade/src/cf', config }, posix).enabled, true);
   assert.equal(activationFor({ cwd: '/home/dev/trade-copy/src', config }, posix).enabled, false);
+});
+
+test('worktree наследует включённость от основного checkout (projects)', () => {
+  const config = { projects: ['/home/dev/trade'] };
+  const cwd = '/home/dev/worktree-space/trade/task-x/trade';
+  const activation = activationForPaths({ cwd, config, paths: ['/home/dev/trade', cwd] }, posix);
+  assert.equal(activation.enabled, true);
+  assert.equal(activation.reason, 'allowlist');
+  assert.equal(activation.inherited, true);
+  assert.equal(activation.path, '/home/dev/trade');
+  assert.equal(activation.entry, '/home/dev/trade');
+});
+
+test('worktree: enabled: false в основном checkout выключает наследование', () => {
+  const config = { enabled: false, projects: ['/home/dev/trade'] };
+  const activation = activationForPaths(
+    { cwd: '/home/dev/worktree-space/trade/task-x/trade', config, paths: ['/home/dev/trade'] },
+    posix,
+  );
+  assert.equal(activation.enabled, false);
+  assert.equal(activation.reason, 'disabled');
+});
+
+test('worktree: enabled: true включает без списка проектов', () => {
+  const activation = activationForPaths(
+    { cwd: '/home/dev/worktree-space/trade/task-x/trade', config: { enabled: true }, paths: ['/home/dev/trade'] },
+    posix,
+  );
+  assert.equal(activation.enabled, true);
+  assert.equal(activation.reason, 'enabled');
+});
+
+test('worktree: файл основного checkout включает сессию', () => {
+  const activation = activationForPaths(
+    { cwd: '/home/dev/worktree-space/trade/task-x/trade', config: {}, hasProjectFile: true, paths: ['/home/dev/trade'] },
+    posix,
+  );
+  assert.equal(activation.enabled, true);
+  assert.equal(activation.reason, 'project-file');
+});
+
+test('activationForPaths не включает чужой каталог и не дублирует cwd', () => {
+  const config = { projects: ['/home/dev/trade'] };
+  assert.equal(activationForPaths({ cwd: '/home/dev/other', config, paths: ['/home/dev/other'] }, posix).enabled, false);
+  assert.equal(
+    activationForPaths({ cwd: '/home/dev/trade', config, paths: ['/home/dev/trade'] }, posix).reason,
+    'allowlist',
+    'cwd проверяется обычным путём, без inherited',
+  );
 });
