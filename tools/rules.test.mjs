@@ -183,3 +183,32 @@ test('mountConfig не оставляет undefined-поля', () => {
   const config = mountConfig({ name: 'edt', transport: 'streamable-http', raw: { url: 'http://x/mcp' } });
   assert.deepEqual(Object.keys(config).sort(), ['serverName', 'transport', 'url']);
 });
+
+test('окружение worktree: блок про build/ws и edt_workspace', () => {
+  const workspace = {
+    state: 'worktree',
+    status: 'ready',
+    root: 'C:\\git\\wt',
+    wsDir: 'C:\\git\\wt\\build\\ws',
+    settings: {},
+    warnings: [],
+  };
+  const text = buildRulesText({}, [server('edt')], [], {}, workspace);
+  assert.match(text, /### Окружение EDT в worktree/);
+  assert.match(text, /C:\\git\\wt\\build\\ws/);
+  assert.match(text, /edt_workspace/);
+  assert.match(text, /build\/logs/);
+  assert.match(text, /mcp__edt__\*/);
+});
+
+test('окружение worktree: без управляемого окружения блока нет', () => {
+  assert.doesNotMatch(buildRulesText({}, [server('edt')]), /Окружение EDT в worktree/);
+  assert.doesNotMatch(
+    buildRulesText({}, [server('edt')], [], {}, { state: 'off', reason: 'main-checkout' }),
+    /Окружение EDT в worktree/,
+  );
+  assert.doesNotMatch(
+    buildRulesText({}, [server('edt')], [], {}, { state: 'error', message: 'нет EDT' }),
+    /Окружение EDT в worktree/,
+  );
+});

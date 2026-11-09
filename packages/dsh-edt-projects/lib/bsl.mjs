@@ -70,7 +70,9 @@ export function bslSettings(env = process.env) {
     cacheDir: first(env, 'DSH_1C_BSL_LS_CACHE') ?? join(env.DSH_HOME ?? join(homedir(), '.dsh'), 'cache', 'bsl-language-server'),
     java: first(env, 'DSH_1C_BSL_LS_JAVA', 'BSL_LS_JAVA') ?? 'java',
     cwd: first(env, 'DSH_1C_BSL_LS_CWD', 'BSL_LS_CWD') ?? '',
-    root: first(env, 'DSH_1C_BSL_LS_ROOT', 'DSH_1C_BSL_LS_CWD', 'BSL_LS_CWD') ?? process.cwd(),
+    // Пусто = «взять корень проекта»; подставляется в bslSettingsFor, где
+    // известен каталог сессии (для worktree — корень worktree, а не cwd DSH).
+    root: first(env, 'DSH_1C_BSL_LS_ROOT', 'DSH_1C_BSL_LS_CWD', 'BSL_LS_CWD') ?? '',
     port: first(env, 'DSH_1C_BSL_LS_PORT'),
     mode: (first(env, 'DSH_1C_BSL_LS_MODE') ?? 'hybrid').toLowerCase(),
     downloadAllowed: download === undefined ? true : !isOff(download),

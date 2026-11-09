@@ -18,6 +18,11 @@
 // включения на лету), поэтому правки применяются через edt_reload без
 // перезапуска DSH.
 //
+// Git worktree: включённость и настройки наследуются от основного checkout, а
+// окружение EDT поднимается своё — workspace в <worktree>/build/ws, свой порт и
+// фоновый процесс (lib/workspace-run.mjs). Так параллельные worktree не делят
+// один workspace EDT; основной checkout продолжает работать с ручным сервером.
+//
 // `shared: true` больше не работает: сервер всегда живёт в скоупе сессии, иначе
 // его инструменты протекали бы в чужие проекты.
 export const name = 'mcp-hub';
@@ -25,17 +30,40 @@ export const name = 'mcp-hub';
 export const inject = ['tools', 'workingDirectory'];
 
 /** Собственные инструменты плагина; префикс edt_ отделяет их от `mcp__edt__*`. */
-export const TOOL_NAMES = ['edt_servers', 'edt_pin', 'edt_unpin', 'edt_reload', 'edt_config'];
+export const TOOL_NAMES = ['edt_servers', 'edt_pin', 'edt_unpin', 'edt_reload', 'edt_config', 'edt_workspace'];
 
+import { spawn } from 'node:child_process';
+import { join, resolve as resolvePath, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { watch } from 'node:fs';
 import { bslAvailable, bslSettings, ensureJar, resolveBsl, startBslSupervisor } from './bsl.mjs';
 import { projectConfigLoaded, projectConfigPath, resolveConfig, userConfigPath } from './config.mjs';
-import { activationFor } from './enable.mjs';
+import { activationForPaths } from './enable.mjs';
 import { normalizeWiki, targetPathOf, writeDenialReason } from './wiki.mjs';
 import { normalizeTestTooling } from './tests.mjs';
 import { initFile, upgradeFile } from './config-file.mjs';
 import { stringifyConfig, validateConfig } from './schema.mjs';
 import { createSkillsProvider } from './skills.mjs';
+import { repositoriesUnder } from './repo.mjs';
+import {
+  BUILD_DIR,
+  detectEdtHome,
+  formatElapsed,
+  isPortOpen,
+  normalizeWorkspaceSettings,
+  pickFreePort,
+  pidAlive,
+  prepareWorkspaceSnapshot,
+  probeHealth,
+  readPort,
+  removeStamp,
+  resolveWorkspaceTarget,
+  stateOf as workspaceState,
+  writePort,
+  writeStamp,
+  writeWorkspaceSnapshot,
+} from './workspace.mjs';
+import { cmdStop as stopWorkspaceNow } from './workspace-run.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -108,6 +136,20 @@ v8std — внешняя база стандартов 1С и диагности
 - Найденный текст — справка, а не приговор: проверку даёт EDT или BSL, v8std объясняет, что она означает.
 - v8std только читает; правки исходников — через EDT-MCP, по правилам выше.`;
 
+/** Блок про отдельное EDT-окружение worktree. */
+function workspaceRules(workspace) {
+  return `
+### Окружение EDT в worktree
+
+Сессия открыта в отдельном git worktree, поэтому у неё свой workspace EDT: ${workspace.wsDir}. Его поднимает плагин, отдельно от основного checkout.
+
+- Первый запуск занимает 1–3 минуты, с импортом проектов — дольше. Готовность проверяй через \`edt_workspace\` (action=status): состояние \`ready\` и порт.
+- Инструменты \`mcp__edt__*\` появляются после готовности сервера. Если вызов не удался из-за соединения — проверь статус, не перезапускай окружение самовольно.
+- Правки исходников — через EDT по правилам выше; workspace EDT знает проекты этого worktree.
+- Не удаляй \`${workspace.root}/build\` при живом EDT. Остановка — \`edt_workspace\` action=stop, перезапуск — action=restart.
+- Логи: ${workspace.root}/build/logs (edt.log, edt-import.log, init.log).`;
+}
+
 /**
  * Собирает блок правил для вики.
  * @param roots результат normalizeWiki().roots
@@ -170,13 +212,15 @@ function vanessaRules(settings) {
 }
 
 /**
- * Текст правил под фактически настроенные серверы, их состояние, вики и тесты.
+ * Текст правил под фактически настроенные серверы, их состояние, вики, тесты
+ * и управляемое окружение worktree.
  * @param env окружение процесса (для тестов передаётся явно).
  * @param servers список записей { name, state }.
  * @param wikiRoots корни вики из normalizeWiki().
  * @param tests секция tests из настроек (флаги YAxUnit / Vanessa).
+ * @param workspace описание окружения worktree (describeWorkspace) или undefined.
  */
-export function buildRulesText(env = process.env, servers = [], wikiRoots = [], tests = {}) {
+export function buildRulesText(env = process.env, servers = [], wikiRoots = [], tests = {}, workspace = undefined) {
   const usable = new Set(servers.filter((s) => s.state !== 'unavailable').map((s) => s.name));
   const byEnv = servers.length === 0;
   const blocks = [HEADER];
@@ -188,6 +232,7 @@ export function buildRulesText(env = process.env, servers = [], wikiRoots = [], 
   if (usable.has('bsl') || (byEnv && (env.BSL_LS_JAR || env.BSL_MCP_URL))) blocks.push(BSL_RULES);
   if (usable.has('tasks') || (byEnv && env.TASKS_MCP_URL)) blocks.push(TASKS_RULES);
   if (usable.has('v8std') || (byEnv && env.V8STD_MCP_URL)) blocks.push(V8STD_RULES);
+  if (workspace?.state === 'worktree') blocks.push(workspaceRules(workspace));
 
   const lazy = servers.filter((s) => s.state === 'lazy').map((s) => s.name);
   const unavailable = servers.filter((s) => s.state === 'unavailable').map((s) => s.name);
@@ -248,11 +293,23 @@ export function mountConfig(entry) {
   return config;
 }
 
-/** Настройки BSL LS из окружения, перекрытые файлами настроек. */
-function bslSettingsFor(effective) {
+/**
+ * Настройки BSL LS из окружения, перекрытые файлами настроек.
+ * @param fallbackRoot корень проекта: работе в worktree нужен его каталог,
+ *   а не каталог процесса DSH. Относительный `servers.bsl.root` считается
+ *   от него же.
+ */
+function bslSettingsFor(effective, fallbackRoot = process.cwd()) {
   const base = bslSettings(process.env);
   const fromFile = effective.config?.servers?.bsl ?? {};
   const pick = (key, fallback) => (fromFile[key] === undefined ? fallback : fromFile[key]);
+  const rawRoot = pick('root', base.root);
+  const root =
+    typeof rawRoot !== 'string' || rawRoot.trim() === ''
+      ? fallbackRoot
+      : isAbsolute(rawRoot)
+        ? rawRoot
+        : resolvePath(fallbackRoot, rawRoot);
   return {
     ...base,
     jar: pick('jar', base.jar),
@@ -260,8 +317,8 @@ function bslSettingsFor(effective) {
     version: pick('version', base.version),
     cacheDir: pick('cacheDir', base.cacheDir),
     java: pick('java', base.java),
-    cwd: pick('cwd', base.cwd),
-    root: pick('root', base.root),
+    cwd: pick('cwd', base.cwd) || fallbackRoot,
+    root,
     port: pick('port', base.port),
     mode: pick('mode', base.mode),
     mcpUrl: pick('mcpUrl', base.mcpUrl),
@@ -299,7 +356,9 @@ const activationReason = (activation) => {
     case 'project-file':
       return 'есть .dsh-1c.json проекта';
     case 'allowlist':
-      return `путь в projects (${activation.entry})`;
+      return activation.inherited === true
+        ? `путь в projects (${activation.entry}), наследовано из ${activation.path}`
+        : `путь в projects (${activation.entry})`;
     default:
       return 'проект не выбран: нет .dsh-1c.json и его нет в projects';
   }
@@ -336,26 +395,106 @@ export async function apply(ctx, config) {
 
   const cwdOf = (agent) => sessionCwd(agent, ctx.workingDirectory);
 
-  const effectiveForCwd = (cwd) => {
-    const effective = resolveConfig({ cwd, env: process.env, base });
+  /** Уникальные пути в порядке появления (для слоёв настроек и allowlist). */
+  const uniquePaths = (values) => {
+    const seen = new Set();
+    const out = [];
+    for (const value of values) {
+      if (typeof value !== 'string' || value === '') continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+    return out;
+  };
+
+  /**
+   * Контекст проекта для каталога сессии: репозитории, слои настроек,
+   * активация и план EDT-окружения. Для worktree настройки берутся ещё и из
+   * основного checkout, а активация наследуется от него же.
+   */
+  const projectContextForCwd = (cwd) => {
+    const repositories = repositoriesUnder(cwd);
+    // Порядок = порядок слияния: основной checkout слабее worktree, cwd сильнее всех.
+    const paths = uniquePaths([...repositories.flatMap((repo) => [repo.mainRoot, repo.root]), cwd]);
+    const effective = resolveConfig({ cwd, projectCwds: paths, env: process.env, base });
     for (const error of effective.errors) {
       if (loggedErrors.has(error)) continue;
       loggedErrors.add(error);
       ctx.logger?.warn?.(`mcp-hub: ${error}`);
     }
-    return effective;
+    const hasProjectFile = paths.some((dir) => projectConfigLoaded(dir));
+    const activation = activationForPaths({ cwd, config: effective.config, hasProjectFile, paths });
+    const enabledRepositories = repositories.filter(
+      (repo) =>
+        activationForPaths({
+          cwd: repo.root,
+          config: effective.config,
+          hasProjectFile: projectConfigLoaded(repo.root) || projectConfigLoaded(repo.mainRoot),
+          paths: [repo.root, repo.mainRoot],
+        }).enabled,
+    );
+    // Если проект включён самим каталогом сессии (файл в task space), явного
+    // списка включённых репозиториев может не быть — берём репозитории сессии.
+    const workspaceRepositories =
+      enabledRepositories.length > 0 ? enabledRepositories : activation.enabled ? repositories : [];
+    const workspace = resolveWorkspaceTarget({
+      cwd,
+      config: effective.config,
+      repositories: workspaceRepositories,
+      env: process.env,
+    });
+    return { cwd, repositories, enabledRepositories, paths, effective, activation, workspace };
   };
 
-  const effectiveFor = (agent) => effectiveForCwd(cwdOf(agent));
+  const contextFor = (agent) => projectContextForCwd(cwdOf(agent));
+  const effectiveFor = (agent) => contextFor(agent).effective;
 
-  const activationOfCwd = (cwd) =>
-    activationFor({ cwd, config: effectiveForCwd(cwd).config, hasProjectFile: projectConfigLoaded(cwd) });
+  /** Каталог, от которого считается корень BSL и относительный workspace.root. */
+  const fallbackRootFor = (context) => {
+    if (context.workspace.state === 'ok') return context.workspace.root;
+    if (context.enabledRepositories.length > 0) return context.enabledRepositories[0].root;
+    return context.cwd;
+  };
 
-  const activationOf = (agent) => activationOfCwd(cwdOf(agent));
+  /** Дешёвая проверка живости: без tasklist, чтобы не звать её на каждом шаге. */
+  const cheapAlive = (pid) => pidAlive(pid);
 
-  const entriesFor = (effective) => {
-    const bsl = bslSettingsFor(effective);
-    return normalizeServers(effective.config?.servers).map((entry) => {
+  /**
+   * Описание окружения для правил, снапшота и инструмента edt_workspace.
+   * `state` — включено ли управление ('worktree'/'off'/'error'),
+   * `status` — фактическая фаза (absent/stopped/starting/ready/stale/failed).
+   */
+  const describeWorkspace = (plan, deps = {}) => {
+    if (plan === undefined || plan.state === 'off') return { state: 'off', reason: plan?.reason };
+    if (plan.state === 'error') {
+      return { state: 'error', reason: plan.reason, message: plan.message, settings: plan.settings };
+    }
+    const current = workspaceState(plan.buildDir, deps);
+    const phase = current.progress?.edt;
+    return {
+      state: 'worktree',
+      status: current.label,
+      root: plan.root,
+      buildDir: plan.buildDir,
+      wsDir: plan.wsDir,
+      mainRoot: plan.mainRoot,
+      port: current.port ?? undefined,
+      pid: current.pid?.pid ?? undefined,
+      phase: phase?.phase,
+      since: phase?.since,
+      detail: phase?.detail,
+      imported: current.imported?.projects?.length,
+      settings: plan.settings,
+      warnings: plan.warnings ?? [],
+      rootSource: plan.rootSource,
+    };
+  };
+
+  const entriesFor = (context) => {
+    const bsl = bslSettingsFor(context.effective, fallbackRootFor(context));
+    const entries = normalizeServers(context.effective.config?.servers).map((entry) => {
       if (entry.raw.provision === true) {
         entry.provisioned = true;
         entry.transport = bsl.mcpUrl === undefined ? 'stdio' : 'streamable-http';
@@ -363,6 +502,16 @@ export async function apply(ctx, config) {
       }
       return entry;
     });
+
+    // В worktree EDT монтируется на порт поднятого для него окружения.
+    if (context.workspace.state === 'ok') {
+      const port = readPort(context.workspace.buildDir) ?? context.workspace.port;
+      const edt = entries.find((entry) => entry.name === 'edt');
+      if (edt !== undefined && Number.isInteger(port)) {
+        edt.raw = { ...edt.raw, url: `http://127.0.0.1:${port}/mcp` };
+      }
+    }
+    return entries;
   };
 
   /** Состояние активации одного агента (сессии): инструменты и смонтированные серверы. */
@@ -401,9 +550,10 @@ export async function apply(ctx, config) {
     }
   };
 
-  const snapshot = (agent) => {
-    const effective = effectiveFor(agent);
-    return entriesFor(effective).map((entry) => {
+  const snapshot = (agent, deps = {}) => {
+    const context = contextFor(agent);
+    const workspace = describeWorkspace(context.workspace, deps);
+    return entriesFor(context).map((entry) => {
       const item = mapFor(agent).get(entry.name);
       let value = 'lazy';
       if (entry.unavailable) value = 'unavailable';
@@ -418,6 +568,7 @@ export async function apply(ctx, config) {
         endpoint: item?.supervisor?.url ?? entry.raw?.url,
         tools: toolNamesOf(agent, entry.name).length,
         error: item?.error,
+        workspace: entry.name === 'edt' ? workspace : undefined,
       };
     });
   };
@@ -434,8 +585,8 @@ export async function apply(ctx, config) {
   };
 
   const mount = async (agent, serverName, options = {}) => {
-    const effective = effectiveFor(agent);
-    const entries = entriesFor(effective);
+    const context = contextFor(agent);
+    const entries = entriesFor(context);
     const entry = entries.find((candidate) => candidate.name === serverName);
     if (entry === undefined) {
       throw new Error(`unknown MCP server "${serverName}"; configured: ${entries.map((item) => item.name).join(', ') || 'none'}`);
@@ -445,7 +596,7 @@ export async function apply(ctx, config) {
     }
 
     const item = itemFor(agent, entry);
-    const bsl = bslSettingsFor(effective);
+    const bsl = bslSettingsFor(context.effective, fallbackRootFor(context));
     const root = options.root ?? entry.raw.root ?? bsl.root;
 
     if (item.fiber && !item.error) {
@@ -515,8 +666,8 @@ export async function apply(ctx, config) {
   };
 
   const unmount = async (agent, serverName) => {
-    const effective = effectiveFor(agent);
-    const entry = entriesFor(effective).find((candidate) => candidate.name === serverName);
+    const context = contextFor(agent);
+    const entry = entriesFor(context).find((candidate) => candidate.name === serverName);
     const map = mapFor(agent);
     const item = map.get(serverName);
     if (item === undefined || !item.fiber) {
@@ -531,8 +682,8 @@ export async function apply(ctx, config) {
 
   /** Перечитывает настройки и перезапускает серверы, у которых изменился конфиг. */
   const reload = async (agent, serverName) => {
-    const effective = effectiveFor(agent);
-    const entries = entriesFor(effective);
+    const context = contextFor(agent);
+    const entries = entriesFor(context);
     const targets = serverName === undefined ? entries : entries.filter((entry) => entry.name === serverName);
     if (serverName !== undefined && targets.length === 0) {
       throw new Error(`unknown MCP server "${serverName}"; configured: ${entries.map((item) => item.name).join(', ') || 'none'}`);
@@ -542,9 +693,8 @@ export async function apply(ctx, config) {
     for (const entry of targets) {
       const item = mapFor(agent).get(entry.name);
       if (item === undefined || !item.fiber) continue;
-      const bsl = bslSettingsFor(effective);
-      const root = entry.raw.root ?? bsl.root;
-      const fresh = signatureOf(entry, root);
+      const freshRoot = entry.raw.root ?? bslSettingsFor(context.effective, fallbackRootFor(context)).root;
+      const fresh = signatureOf(entry, freshRoot);
       if (fresh === item.signature) continue;
       await disposeItem(item);
       const result = await mount(agent, entry.name, {});
@@ -582,17 +732,146 @@ export async function apply(ctx, config) {
     }
   };
 
+  // --- окружение EDT в worktree ----------------------------------------------
+  const initializerPath = fileURLToPath(new URL('./workspace-run.mjs', import.meta.url));
+  /** buildDir -> Promise подъёма (одна на процесс, чтобы не поднять два EDT). */
+  const ensuring = new Map();
+  /** buildDir -> { agents, settings, startedByUs } для остановки после последней сессии. */
+  const workspaceSessions = new Map();
+
+  const spawnInitializer = (root, action = 'init') => {
+    try {
+      const child = spawn(process.execPath, [initializerPath, action, '--root', root], {
+        cwd: root,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      return true;
+    } catch (error) {
+      ctx.logger?.warn?.(`mcp-hub: не удалось запустить ${action} окружения EDT: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  };
+
+  const registerWorkspaceSession = (buildDir, agent, settings) => {
+    let record = workspaceSessions.get(buildDir);
+    if (record === undefined) {
+      record = { agents: new Set(), settings, startedByUs: false };
+      workspaceSessions.set(buildDir, record);
+    }
+    if (agent !== undefined) record.agents.add(agent);
+    if (settings !== undefined) record.settings = settings;
+    return record;
+  };
+
+  /** Фаза подъёма без pid (идёт импорт или старт GUI) тоже считается запуском. */
+  const busyLaunching = (current, settings = {}) => {
+    if (current.label === 'starting') return true;
+    const phase = current.progress?.edt;
+    if (phase?.phase === undefined || ['failed', 'ready'].includes(phase.phase)) return false;
+    const updated = Date.parse(phase.updated ?? phase.since ?? '');
+    if (Number.isNaN(updated)) return true;
+    const budget = Math.max(settings.startTimeout ?? 1800, settings.importTimeout ?? 3600) * 1000 + 5 * 60_000;
+    return Date.now() - updated < budget;
+  };
+
+  /**
+   * Гарантирует подъём окружения: занимает порт, пишет снимок и запускает
+   * фоновый init. Готовое/стартующее окружение только принимается.
+   */
+  const ensureWorkspace = async (agent, context = contextFor(agent), options = {}) => {
+    const plan = context.workspace;
+    if (plan?.state !== 'ok') return undefined;
+    const key = plan.buildDir;
+    const record = registerWorkspaceSession(key, agent, plan.settings);
+    // После edt_workspace stop не поднимаем заново, пока не попросят init.
+    if (record.suppressed === true && options.force !== true) {
+      return workspaceState(key, { alive: cheapAlive });
+    }
+    const pending = ensuring.get(key);
+    if (pending !== undefined) return pending;
+
+    const promise = (async () => {
+      let current = workspaceState(key, { alive: cheapAlive });
+      if (current.label === 'failed' && options.force === true) {
+        removeStamp(key, 'failed');
+        current = workspaceState(key, { alive: cheapAlive });
+      }
+      if (current.label === 'ready') return current;
+      if (current.label === 'failed') {
+        // EDT мог подняться позже таймаута health: проверяем и принимаем.
+        if (await probeHealth(current.port)) {
+          removeStamp(key, 'failed');
+          writeStamp(key, 'ready');
+          return workspaceState(key, { alive: cheapAlive });
+        }
+        return current;
+      }
+      if (busyLaunching(current, plan.settings)) return current;
+      if (current.label === 'stale') removeStamp(key, 'ready');
+
+      try {
+        let port = readPort(key);
+        // Занятый порт из прошлого запуска — чужой процесс: берём новый.
+        if (port !== null && (await isPortOpen(port))) port = null;
+        if (port === null) {
+          port = await pickFreePort(plan.settings.ports);
+          writePort(key, port);
+        }
+        const workspaceSnapshot = prepareWorkspaceSnapshot({
+          root: plan.root,
+          mainRoot: plan.mainRoot,
+          settings: plan.settings,
+        });
+        if (options.import === true) workspaceSnapshot.forceImport = true;
+        writeWorkspaceSnapshot(key, workspaceSnapshot);
+        record.startedByUs = true;
+        spawnInitializer(plan.root, 'init');
+        return workspaceState(key, { alive: cheapAlive });
+      } catch (error) {
+        ctx.logger?.warn?.(`mcp-hub: окружение EDT не поднялось: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+    })().finally(() => ensuring.delete(key));
+
+    ensuring.set(key, promise);
+    return promise;
+  };
+
+  /** Снимает сессию с окружения; после последней — останавливает поднятое нами EDT. */
+  const releaseWorkspaceSession = (agent) => {
+    for (const [buildDir, record] of workspaceSessions) {
+      if (!record.agents.delete(agent)) continue;
+      if (record.agents.size > 0) continue;
+      workspaceSessions.delete(buildDir);
+      if (record.startedByUs !== true) continue;
+      if (record.settings?.stopOnSessionEnd === false) continue;
+      spawnInitializer(resolvePath(buildDir, '..'), 'stop');
+    }
+  };
+
   const activate = async (agent) => {
     const state = stateOf(agent);
     if (state.active) return;
     state.active = true;
-    for (const definition of [serversTool(), pinTool(), unpinTool(), reloadTool()]) {
+    const context = contextFor(agent);
+    for (const definition of [serversTool(), pinTool(), unpinTool(), reloadTool(), workspaceTool()]) {
       state.disposers.push(agent.ctx.tools.register(definition));
     }
-    watchFile(projectConfigPath(cwdOf(agent)));
+    for (const dir of context.paths) watchFile(projectConfigPath(dir));
 
-    const effective = effectiveFor(agent);
-    for (const entry of entriesFor(effective)) {
+    // Окружение поднимается до монтирования edt: нужен порт для адреса.
+    if (context.workspace.state === 'ok') {
+      try {
+        await ensureWorkspace(agent, context);
+      } catch (error) {
+        ctx.logger?.warn?.(`mcp-hub: окружение EDT не поднялось: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    for (const entry of entriesFor(context)) {
       if (entry.lazy || entry.unavailable) continue;
       try {
         await mount(agent, entry.name);
@@ -615,6 +894,7 @@ export async function apply(ctx, config) {
     }
     for (const item of state.items.values()) await disposeItem(item);
     state.items.clear();
+    releaseWorkspaceSession(agent);
   };
 
   /**
@@ -623,13 +903,26 @@ export async function apply(ctx, config) {
    */
   const reconcile = async (agent) => {
     if (agent === undefined) return;
-    const { enabled } = activationOf(agent);
+    const context = contextFor(agent);
     const state = agentStates.get(agent);
-    if (enabled) {
-      if (state === undefined || !state.active) await activate(agent);
+    if (!context.activation.enabled) {
+      await deactivate(agent);
       return;
     }
-    await deactivate(agent);
+    if (state === undefined || !state.active) {
+      await activate(agent);
+      return;
+    }
+
+    if (context.workspace.state === 'ok') {
+      await ensureWorkspace(agent, context);
+      // Порт появился после init — адрес edt изменился, перемонтируем.
+      try {
+        await reload(agent, 'edt');
+      } catch (error) {
+        ctx.logger?.warn?.(`mcp-hub: не удалось обновить адрес EDT: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   };
 
   ctx.on('agent/created', async ({ agent }) => {
@@ -649,6 +942,15 @@ export async function apply(ctx, config) {
     return next();
   });
 
+  ctx.on('agent/disposed', ({ agent }) => {
+    releaseWorkspaceSession(agent);
+  });
+
+  ctx.effect(() => () => {
+    ensuring.clear();
+    workspaceSessions.clear();
+  });
+
   // --- вики: чтение разрешено, запись отклоняется ---
   ctx.tools.guard((exec) => {
     const target = targetPathOf(exec);
@@ -662,13 +964,16 @@ export async function apply(ctx, config) {
   const serversTool = () =>
     textTool(
       'edt_servers',
-      'List MCP servers of the 1C plugin: state (mounted, lazy, unavailable, failed), scope, transport, tool count, workspace root and endpoint. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
+      'List MCP servers of the 1C plugin: state (mounted, lazy, unavailable, failed), scope, transport, tool count, workspace root and endpoint, plus the worktree EDT environment when one is managed. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
       {},
       async (_args, exec) => {
-        const rows = snapshot(exec?.agent).map((item) => {
+        const rows = snapshot(exec?.agent, { alive: cheapAlive }).map((item) => {
+          const workspace = item.workspace;
           const extra = [
             item.root === undefined ? null : `root: ${item.root}`,
             item.endpoint === undefined ? null : `endpoint: ${item.endpoint}`,
+            workspace?.state === 'worktree' ? `worktree: ${workspace.status}${workspace.port === undefined ? '' : ` port ${workspace.port}`}` : null,
+            workspace?.state === 'error' ? `worktree: ${workspace.message}` : null,
             item.error === undefined ? null : `error: ${item.error}`,
           ]
             .filter(Boolean)
@@ -727,6 +1032,121 @@ export async function apply(ctx, config) {
       },
     );
 
+  /** План окружения с необязательным переопределением корня (параметр root). */
+  const workspacePlanFor = (exec, rootOverride) => {
+    const context = contextFor(exec?.agent);
+    if (rootOverride === undefined || rootOverride === '') return { context, plan: context.workspace };
+    const settings = context.workspace?.settings ?? normalizeWorkspaceSettings(context.effective.config?.workspace, process.env);
+    const root = isAbsolute(rootOverride) ? rootOverride : resolvePath(context.cwd, rootOverride);
+    const buildDir = join(root, BUILD_DIR);
+    return {
+      context,
+      plan: {
+        state: 'ok',
+        settings,
+        root,
+        buildDir,
+        wsDir: join(buildDir, 'ws'),
+        mainRoot: context.workspace?.mainRoot,
+        warnings: context.workspace?.warnings ?? [],
+      },
+    };
+  };
+
+  const workspaceText = (plan, deps = {}) => {
+    const info = describeWorkspace(plan, deps);
+    if (info.state === 'off') {
+      const why =
+        info.reason === 'disabled'
+          ? 'workspace.enabled=false'
+          : 'основной checkout: окружение поднимается только в git worktree';
+      return `Автоподъём EDT-окружения выключен — ${why}.`;
+    }
+    if (info.state === 'error') return `EDT-окружение недоступно: ${info.message}`;
+
+    const lines = [
+      `Worktree: ${info.root}`,
+      `Workspace EDT: ${info.wsDir}`,
+      `Состояние: ${info.status}${info.port === undefined ? '' : `, порт ${info.port}`}${info.pid === undefined ? '' : `, pid ${info.pid}`}`,
+    ];
+    if (info.phase !== undefined) {
+      const elapsed = info.since === undefined ? '' : ` (${formatElapsed(info.since)})`;
+      lines.push(`Фаза: ${info.phase}${elapsed}${info.detail === undefined ? '' : ` — ${info.detail}`}`);
+    }
+    if (info.imported !== undefined) lines.push(`Импортировано проектов: ${info.imported}`);
+    const home = detectEdtHome(info.settings, { platform: process.platform, env: process.env });
+    lines.push(
+      `EDT: ${home.home ?? 'не найден'}${home.error === undefined ? '' : ` — ${home.error}`}${home.mcpBundle === false ? ' (бандл EDT-MCP не найден в plugins/features)' : ''}`,
+    );
+    const importMode = info.settings.import;
+    lines.push(`Импорт проектов: ${importMode === true ? 'да' : importMode === false ? 'нет' : 'авто (если workspace пуст)'}`);
+    for (const warning of info.warnings) lines.push(`! ${warning}`);
+    lines.push(`Логи: ${join(info.buildDir, 'logs')}`);
+    return lines.join('\n');
+  };
+
+  const workspaceTool = () =>
+    textTool(
+      'edt_workspace',
+      'Manage the EDT workspace of this git worktree: action=status reports where build/ws is, whether EDT is ready, its port, phase and warnings; init starts it (or retries a failed start); stop stops the EDT process; restart stops and starts again, optionally re-importing projects; import imports EDT projects while EDT is stopped (it runs in the background).',
+      {
+        action: {
+          type: 'string',
+          description: 'status | init | stop | restart | import',
+          enum: ['status', 'init', 'stop', 'restart', 'import'],
+        },
+        root: { type: 'string', description: 'Worktree root to manage; defaults to the project worktree of this session.' },
+        import: { type: 'boolean', description: 'For init/restart: import EDT projects even if the workspace already has some.' },
+      },
+      async (args, exec) => {
+        const action = args.action ?? 'status';
+        const { context, plan } = workspacePlanFor(exec, args.root);
+        if (action === 'status') return { text: workspaceText(plan, { alive: (pid) => pidAlive(pid, ['1cedt']) }) };
+
+        if (plan === undefined || plan.state !== 'ok') {
+          throw new Error(`EDT-окружение недоступно: ${plan?.message ?? workspaceText(plan)}`);
+        }
+        const record = registerWorkspaceSession(plan.buildDir, exec?.agent, plan.settings);
+
+        if (action === 'stop') {
+          const result = await stopWorkspaceNow(plan.root);
+          record.suppressed = true;
+          return { text: result.stopped ? `EDT остановлен (pid ${result.pid}).` : `EDT не остановлен: ${result.reason}.` };
+        }
+
+        record.suppressed = false;
+        if (action === 'restart' || action === 'import') {
+          if (action === 'import') {
+            const current = workspaceState(plan.buildDir, { alive: cheapAlive });
+            if (current.label === 'ready' || busyLaunching(current)) {
+              throw new Error('EDT запущен: импорт возможен только при остановленном EDT. Используйте action=restart с import: true.');
+            }
+          }
+          if (action === 'restart') await stopWorkspaceNow(plan.root);
+        }
+
+        const forceImport = args.import === true || action === 'import';
+        const result = await ensureWorkspace(exec?.agent, { ...context, workspace: plan }, { force: true, import: forceImport });
+        if (result === undefined) throw new Error('Не удалось запустить подъём окружения: смотрите логи build/logs.');
+        if (result.label === 'ready') {
+          return { text: `EDT уже готов (порт ${result.port ?? '-'}).\n\n${workspaceText(plan)}` };
+        }
+        const headline =
+          action === 'import'
+            ? 'Импорт проектов запущен в фоне.'
+            : action === 'restart'
+              ? 'EDT перезапускается в фоне.'
+              : 'Подъём EDT-окружения запущен в фоне.';
+        return {
+          text: [
+            headline,
+            'Первый запуск занимает 1–3 минуты (с импортом дольше). Проверяйте готовность через action=status.',
+            workspaceText(plan),
+          ].join('\n'),
+        };
+      },
+    );
+
   const configTool = () =>
     textTool(
       'edt_config',
@@ -747,12 +1167,21 @@ export async function apply(ctx, config) {
         if (path === undefined) throw new Error('edt_config: cannot resolve the settings path');
 
         if (args.action === 'show') {
-          const effective = effectiveFor(exec?.agent);
+          const context = contextFor(exec?.agent);
+          const effective = context.effective;
           const { errors, warnings } = validateConfig(effective.config);
-          const activation = activationOf(exec?.agent);
+          const activation = context.activation;
+          const workspace = describeWorkspace(context.workspace, { alive: cheapAlive });
+          const workspaceLine =
+            workspace.state === 'worktree'
+              ? `EDT-окружение worktree: ${workspace.status}, порт ${workspace.port ?? '-'}, ${workspace.root}`
+              : workspace.state === 'error'
+                ? `EDT-окружение worktree: ошибка — ${workspace.message}`
+                : 'EDT-окружение worktree: выключено (поднимается только в git worktree)';
           const head = [
             `Проект: ${activation.enabled ? 'включён' : 'выключен'} — ${activationReason(activation)}`,
             `Источники: ${effective.sources.length > 0 ? effective.sources.join(', ') : 'только cordis.patch.yml'}`,
+            workspaceLine,
             `Действующие настройки:\n${stringifyConfig(effective.config)}`,
           ];
           if (errors.length > 0) head.push(`Ошибки:\n${errors.map((line) => `  ✗ ${line}`).join('\n')}`);
@@ -808,8 +1237,10 @@ export async function apply(ctx, config) {
     inner.skills.registerProvider((control) => {
       skillsControl = control;
       return createSkillsProvider({
-        resolveConfig: (cwd) => resolveConfig({ cwd: cwd ?? process.cwd(), env: process.env, base }).config,
-        isEnabled: (cwd, config) => activationFor({ cwd, config, hasProjectFile: projectConfigLoaded(cwd) }).enabled,
+        // Навыки гейтятся тем же контекстом проекта, что и инструменты: в
+        // worktree включённость наследуется от основного checkout.
+        resolveConfig: (cwd) => projectContextForCwd(cwd ?? process.cwd()).effective.config,
+        isEnabled: (cwd) => projectContextForCwd(cwd ?? process.cwd()).activation.enabled,
         logger: ctx.logger,
       });
     });
@@ -827,10 +1258,17 @@ export async function apply(ctx, config) {
         const agent = context?.agent;
         // В выключенном проекте секция пустая: renderPrompt выбрасывает её,
         // поэтому в промпте не остаётся ни строчки про 1С.
-        if (agent === undefined || !activationOf(agent).enabled) return '';
-        const effective = effectiveFor(agent);
-        const { roots } = normalizeWiki(effective.config?.wiki, { cwd: cwdOf(agent) });
-        return buildRulesText(process.env, snapshot(agent), roots, effective.config?.tests);
+        if (agent === undefined) return '';
+        const projectContext = contextFor(agent);
+        if (!projectContext.activation.enabled) return '';
+        const { roots } = normalizeWiki(projectContext.effective.config?.wiki, { cwd: projectContext.cwd });
+        return buildRulesText(
+          process.env,
+          snapshot(agent, { alive: cheapAlive }),
+          roots,
+          projectContext.effective.config?.tests,
+          describeWorkspace(projectContext.workspace, { alive: cheapAlive }),
+        );
       },
     });
   });
