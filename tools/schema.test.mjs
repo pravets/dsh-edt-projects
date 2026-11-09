@@ -172,6 +172,18 @@ test('включение проекта: projects в схеме, enabled изв�
   assert.deepEqual(ok.errors, []);
 });
 
+test('v8std: адрес переопределяется ключом схемы, в defaults его нет', () => {
+  assert.equal(isKnownPath('servers.v8std.url'), true);
+  assert.equal(isKnownPath('servers.v8std.headers'), true);
+  assert.equal(DEFAULTS.servers.v8std, undefined, 'дефолт живёт в cordis.patch.yml, иначе upgrade перекроет V8STD_MCP_URL');
+  assert.equal(DEFAULTS.servers.bsl !== undefined, true, 'остальные серверы из defaults не пропали');
+
+  const good = validateConfig({ version: CONFIG_VERSION, servers: { v8std: { url: 'https://ai.v8std.ru/mcp' } } });
+  assert.deepEqual(good.errors, []);
+  const bad = validateConfig({ version: CONFIG_VERSION, servers: { v8std: { url: 42 } } });
+  assert.ok(bad.errors.some((line) => line.includes('servers.v8std.url')));
+});
+
 test('sonar и gitlab: ключи в схеме, дефолты выключены, upgrade их добавляет', () => {
   assert.deepEqual(DEFAULTS.sonar, { enabled: false, projectKey: '' });
   assert.deepEqual(DEFAULTS.gitlab, { enabled: false });

@@ -45,6 +45,8 @@
 #   DSH_1C_BSL_MCP_URL        адрес уже запущенного BSL LS по Streamable HTTP
 #   TASKS_MCP_URL             адрес MCP-сервера системы задач
 #   TASKS_MCP_TOKEN           токен системы задач
+#   V8STD_MCP_URL             адрес MCP-сервера стандартов (по умолчанию https://ai.v8std.ru/mcp)
+#   V8STD_MCP_TOKEN           токен своего инстанса v8std, если он нужен
 - insert:
     - id: mcp-hub
       name: 'dsh-edt-projects'
@@ -89,4 +91,18 @@
             url: !!js 'process.env.TASKS_MCP_URL ?? "http://127.0.0.1:8090/mcp"'
             headers: !!js 'process.env.TASKS_MCP_TOKEN ? { Authorization: `Bearer ${process.env.TASKS_MCP_TOKEN}` } : {}'
             toolCallTimeoutMs: 120000
+            failOnStartupError: false
+
+          # Стандарты 1С и диагностики: публичная read-only база v8std.
+          # lazy: пять схем не занимают контекст, пока не нужны. Модель подключает
+          # сервер по edt_pin, когда EDT или BSL LS выдал код ошибки либо задан
+          # вопрос про стандарт.
+          # Свой инстанс: servers.v8std.url в файлах настроек (перекрывает это
+          # значение) или переменная V8STD_MCP_URL.
+          v8std:
+            lazy: true
+            transport: streamable-http
+            url: !!js 'process.env.V8STD_MCP_URL ?? "https://ai.v8std.ru/mcp"'
+            headers: !!js 'process.env.V8STD_MCP_TOKEN ? { Authorization: `Bearer ${process.env.V8STD_MCP_TOKEN}` } : {}'
+            toolCallTimeoutMs: 60000
             failOnStartupError: false

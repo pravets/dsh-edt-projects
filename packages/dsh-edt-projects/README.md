@@ -29,7 +29,9 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 - `skills/` — навыки `edt-mcp-project-sonar` и `edt-mcp-project-gitlab`,
   включаются флагами `sonar.enabled` и `gitlab.enabled` внутри включённого
   проекта.
-- `cordis.patch.yml` — состав серверов, который применяет менеджер плагинов.
+- `cordis.patch.yml` — состав серверов, который применяет менеджер плагинов:
+  EDT, BSL Language Server по требованию, MCP-трекер и `v8std` (стандарты 1С и
+  расшифровка диагностик EDT/BSL).
 
 ## Лицензия
 

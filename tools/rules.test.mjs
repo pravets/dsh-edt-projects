@@ -45,6 +45,27 @@ test('имена собственных инструментов — edt_*, бе
   assert.doesNotMatch(text, /mcp_pin|mcp_unpin|mcp_servers|mcp_reload|mcp_config/);
 });
 
+test('v8std: блок про стандарты и диагностики при настроенном сервере', () => {
+  const text = buildRulesText({}, [server('edt'), server('v8std', 'lazy')]);
+  assert.match(text, /### Стандарты и ошибки \(v8std\)/);
+  assert.match(text, /v8std_explain_diagnostics/);
+  assert.match(text, /v8std_get_page/);
+  assert.match(text, /v8std_search/);
+  assert.match(text, /v8std_explain_snippet/);
+  assert.match(text, /mcp__v8std__\*/);
+  assert.match(text, /Не выдумывай номера стандартов/);
+  assert.match(text, /Подключены по требованию: v8std/);
+});
+
+test('v8std: без сервера блока нет, но pin-правила его называют', () => {
+  assert.doesNotMatch(buildRulesText({}, [server('edt')]), /v8std/);
+  assert.match(buildRulesText({}, [server('edt'), server('bsl', 'lazy')]), /v8std/);
+});
+
+test('v8std: по переменной окружения блок тоже появляется', () => {
+  assert.match(buildRulesText({ V8STD_MCP_URL: 'http://127.0.0.1:1/mcp' }, []), /### Стандарты и ошибки \(v8std\)/);
+});
+
 test('правки 1С идут через EDT, с процедурой эскалации', () => {
   const text = buildRulesText({}, [server('edt')]);
   assert.match(text, /Правки конфигурации — только через EDT/);

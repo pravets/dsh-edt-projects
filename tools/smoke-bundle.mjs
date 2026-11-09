@@ -132,7 +132,8 @@ async function main() {
   if (!composed.includes(targetUrl) && !composed.includes('process.env.EDT_MCP_URL')) {
     fail(`в композиции нет ни ${targetUrl}, ни выражения EDT_MCP_URL`);
   }
-  if (!process.exitCode) console.log('  ok   правила и строка сервера попали в композицию');
+  if (!composed.includes('v8std')) fail('в композиции нет сервера v8std (стандарты и диагностики)');
+  if (!process.exitCode) console.log('  ok   правила и строки серверов (edt, v8std) попали в композицию');
 
   // 4. Два каталога: без 1С-настроек и с ними.
   const projects = join(root, '.smoke', 'projects');

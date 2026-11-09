@@ -1,6 +1,6 @@
 {
   "name": "dsh-edt-projects-workspace",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness bundle: MCP hub for 1C development with on-demand servers, per-project settings, a read-only wiki, testability rules, config init/upgrade and bundled SonarQube/GitLab skills",
