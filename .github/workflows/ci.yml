@@ -36,4 +36,8 @@ jobs:
         run: |
           node --check tools/validate-bundle.mjs
           node --check tools/check-edt-mcp.mjs
+          node --check tools/edt-workspace.mjs
+          node --check packages/dsh-edt-projects/lib/repo.mjs
+          node --check packages/dsh-edt-projects/lib/workspace.mjs
+          node --check packages/dsh-edt-projects/lib/workspace-run.mjs
 

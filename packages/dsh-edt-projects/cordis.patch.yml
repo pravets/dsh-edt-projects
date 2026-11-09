@@ -27,9 +27,19 @@
 # Флаги tests включают правила тестируемости: YAxUnit — закладывать тестируемость
 # и писать тесты в указанный проект, Vanessa — предлагать сценарные тесты.
 #
+# Git worktree: плагин сам поднимает отдельный EDT workspace в
+# <worktree>/build/ws со своим портом MCP-сервера и импортом проектов, а
+# включённость и настройки наследует от основного checkout. Секция настроек:
+#   "workspace": { "home": { "win32": "C:\\Program Files\\1C\\1CE\\components\\1c-edt-..." },
+#                  "import": "auto", "ports": { "min": 20000, "max": 39999 },
+#                  "stopOnSessionEnd": true }
+# Управление из сессии — инструмент edt_workspace (status/init/stop/restart/import).
+#
 # Переменные окружения (префикс DSH_1C_ — чтобы ни с чем не пересекаться):
 #   EDT_MCP_URL               адрес MCP-сервера EDT (по умолчанию 127.0.0.1:8765)
 #   EDT_MCP_TOKEN             токен, если он включён в EDT
+#   DSH_1C_EDT_HOME           каталог установки EDT для worktree (перекрывает workspace.home)
+#   DSH_1C_EDT_IMPORT         1/0 — импортировать проекты в workspace worktree
 #   DSH_1C_WIKI               пути к вики через «;»
 #   DSH_1C_WIKI_ENTRY         входная точка вики, например wiki/index.md
 #   DSH_1C_BSL_LS_JAR         готовый bsl-language-server jar (главнее всего)

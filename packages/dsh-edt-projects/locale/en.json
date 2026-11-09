@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "1C:EDT + BSL MCP",
-    "description": "MCP hub for 1C development: active only in selected projects (.dsh-1c.json or the projects list). There EDT is connected up front, while BSL Language Server (diagnostics, types, navigation) and a task tracker are mounted on demand via edt_pin; 1C rules enter the prompt only there."
+    "description": "MCP hub for 1C development: active only in selected projects (.dsh-1c.json or the projects list). There EDT is connected up front, while BSL Language Server (diagnostics, types, navigation), standards and a task tracker are mounted on demand via edt_pin; in a git worktree the plugin raises its own EDT workspace under build/ws. 1C rules enter the prompt only there."
   }
 }
