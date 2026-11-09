@@ -19,9 +19,11 @@ test('init создаёт файл со всеми ключами по умол�
 
   const written = JSON.parse(readFileSync(fileIn(dir), 'utf8'));
   assert.equal(written.version, CONFIG_VERSION);
-  assert.deepEqual(Object.keys(written).sort(), ['gitlab', 'projects', 'servers', 'sonar', 'tests', 'version', 'wiki']);
+  assert.deepEqual(Object.keys(written).sort(), ['gitlab', 'projects', 'servers', 'sonar', 'tests', 'version', 'wiki', 'workspace']);
   assert.deepEqual(written.wiki.paths, []);
   assert.equal(written.tests.yaxunit.enabled, false);
+  assert.equal(written.workspace.enabled, true);
+  assert.equal(written.workspace.import, 'auto');
 });
 
 test('init не перезаписывает существующий файл', () => {
@@ -150,7 +152,51 @@ test('stringifyConfig: отступ 2 и перевод строки в конц
 
 test('порядок ключей стабилен: известные по схеме, затем прочие', () => {
   const plan = planUpgrade({ zzz: 1, tests: { vanessa: { enabled: true } }, wiki: { paths: ['a'] } });
-  assert.deepEqual(Object.keys(plan.config), ['version', 'projects', 'wiki', 'servers', 'tests', 'sonar', 'gitlab', 'zzz']);
+  assert.deepEqual(Object.keys(plan.config), ['version', 'projects', 'wiki', 'servers', 'workspace', 'tests', 'sonar', 'gitlab', 'zzz']);
+});
+
+test('workspace: ключи в схеме, upgrade дописывает, import проверяется отдельно', () => {
+  assert.equal(CONFIG_VERSION, 3);
+  assert.deepEqual(DEFAULTS.workspace.ports, { min: 20000, max: 39999 });
+  assert.equal(DEFAULTS.workspace.stopOnSessionEnd, true);
+  for (const key of [
+    'workspace.enabled',
+    'workspace.root',
+    'workspace.home.win32',
+    'workspace.home.linux',
+    'workspace.vm',
+    'workspace.xmxIde',
+    'workspace.xmxImport',
+    'workspace.import',
+    'workspace.importTimeout',
+    'workspace.startTimeout',
+    'workspace.projects',
+    'workspace.ports.min',
+    'workspace.ports.max',
+    'workspace.stopOnSessionEnd',
+  ]) {
+    assert.equal(isKnownPath(key), true, key);
+  }
+
+  const plan = planUpgrade({ version: 2 });
+  assert.ok(plan.added.includes('workspace.enabled'));
+  assert.ok(plan.added.includes('workspace.import'));
+  assert.ok(!plan.added.includes('version') || plan.version.from === 2);
+
+  // import допускает true/false/"auto" и ничего больше.
+  for (const value of [true, false, 'auto']) {
+    assert.deepEqual(validateConfig({ version: CONFIG_VERSION, workspace: { import: value } }).errors, [], String(value));
+  }
+  for (const value of ['yes', 1, null]) {
+    assert.ok(
+      validateConfig({ version: CONFIG_VERSION, workspace: { import: value } }).errors.some((line) => line.includes('workspace.import')),
+      String(value),
+    );
+  }
+
+  assert.ok(validateConfig({ workspace: { ports: { min: 30000, max: 20000 } } }).errors.some((line) => line.includes('ports')));
+  assert.ok(validateConfig({ workspace: { startTimeout: 0 } }).errors.some((line) => line.includes('workspace.startTimeout')));
+  assert.ok(validateConfig({ workspace: { projects: 'src/cf' } }).errors.some((line) => line.includes('workspace.projects')));
 });
 
 test('включение проекта: projects в схеме, enabled известен, но не навязывается', () => {
