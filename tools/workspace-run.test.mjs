@@ -96,6 +96,10 @@ test('cmdInit занимает порт, пишет prefs и запускает 
     assert.equal(code, 0);
     assert.equal(readPort(join(root, 'build')), 23456);
     assert.match(readFileSync(prefsPath(join(root, 'build')), 'utf8'), /mcpServerPort=23456/);
+    const prefs = readFileSync(prefsPath(join(root, 'build')), 'utf8');
+    assert.match(prefs, /mcpServerHttpEnabled=true/);
+    assert.match(prefs, /mcpPlainTextMode=true/, 'plain text включается до запуска EDT');
+    assert.match(prefs, /mcpDisabledTools=git,ask_workmate/, 'get_form_screenshot включён до запуска EDT');
     assert.equal(existsSync(join(root, 'build', 'workspace.json')), true);
     assert.equal(spawns.length, 1);
     assert.deepEqual(spawns[0].args.slice(1), ['run', '--root', root]);

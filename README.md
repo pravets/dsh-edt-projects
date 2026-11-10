@@ -327,7 +327,12 @@ DSH не рендерит embedded resource, поэтому в workspace сра�
 
 - `mcpPlainTextMode=true` — EDT-MCP отдаёт markdown/текст вместо resource (`list_projects`,
   `get_project_errors` и т.д.). Настройка `workspace.plainText: false` возвращает прежнее
-  поведение сервера.
+  поведение сервера. Ключ пишется в
+  `build/ws/.metadata/.plugins/org.eclipse.core.runtime/.settings/com.ditrix.edt.mcp.server.prefs`
+  до запуска EDT (там же `mcpServerHttpEnabled=true`); сервер читает его через
+  `Activator.getPreferenceStore()` при каждом вызове инструмента, но store кэшируется на
+  время работы — если EDT уже запущен, нужен `edt_workspace action=restart`. Отдельной
+  переменной окружения для plain text в EDT-MCP нет.
 - `mcpDisabledTools` без `get_form_screenshot` и JVM-флаг
   `-DnativeFormBufferedLayoutRender=true` после `-vmargs` — иначе `get_form_screenshot` на Windows
   не работает. Настройка `workspace.formScreenshots: false` выключает и флаг, и инструмент.

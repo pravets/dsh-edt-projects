@@ -353,6 +353,11 @@ function disabledToolsWith(current, tool) {
   return [...new Set([...disabledToolsList(current), tool])].join(',');
 }
 
+/** Содержимое prefs EDT-MCP этого workspace (undefined — файла нет). */
+export function readPrefs(buildDir) {
+  return readText(prefsPath(buildDir));
+}
+
 /** prefs, включающие MCP-сервер EDT на нужном порту при старте. */
 export function writePrefs(buildDir, port, options = {}) {
   const file = prefsPath(buildDir);

@@ -54,8 +54,10 @@ import {
   pickFreePort,
   pidAlive,
   prepareWorkspaceSnapshot,
+  prefValue,
   probeHealth,
   readPort,
+  readPrefs,
   removeStamp,
   requiredJava,
   resolveEdtVm,
@@ -1169,6 +1171,14 @@ export async function apply(ctx, config) {
     const importMode = info.settings.import;
     lines.push(`Импорт проектов: ${importMode === true ? 'да' : importMode === false ? 'нет' : 'авто (если workspace пуст)'}`);
     lines.push(`Plain text: ${info.settings.plainText === false ? 'нет' : 'да'}; скриншоты форм: ${info.settings.formScreenshots === false ? 'нет' : 'да'}`);
+    const prefsText = readPrefs(info.buildDir);
+    const plainPref = prefsText === undefined ? undefined : prefValue(prefsText, 'mcpPlainTextMode');
+    lines.push(
+      `Plain text в prefs: ${prefsText === undefined ? 'файла ещё нет' : plainPref === undefined ? 'ключа нет' : plainPref === 'true' ? 'да' : 'нет'}`,
+    );
+    if (prefsText !== undefined && info.settings.plainText !== false && plainPref !== 'true') {
+      lines.push('! prefs не содержат mcpPlainTextMode=true — выполните restart окружения');
+    }
     if (info.warning !== undefined) {
       const warning = info.warning;
       const memory = warning.used === undefined ? '' : ` (${warning.used}/${warning.total} MB)`;

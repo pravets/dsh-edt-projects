@@ -44,9 +44,11 @@
 
 ### Добавлено
 
-- **Plain text mode** для workspace: `mcpPlainTextMode=true`, чтобы
+- **Plain text mode** для workspace: `mcpPlainTextMode=true` в prefs до старта EDT, чтобы
   markdown-инструменты EDT-MCP не отдавали embedded resource, который DSH не
-  рендерит (`workspace.plainText`, по умолчанию `true`).
+  рендерит (`workspace.plainText`, по умолчанию `true`). Сервер читает ключ при
+  каждом вызове, но preference store кэшируется — смена на работающем EDT требует
+  `edt_workspace action=restart`; отдельной env-переменной у EDT-MCP нет.
 - **`get_form_screenshot`** включён: EDT запускается с
   `-DnativeFormBufferedLayoutRender=true` после `-vmargs`, а prefs
   `mcpDisabledTools` не содержат инструмент (`workspace.formScreenshots`, по
