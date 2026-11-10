@@ -818,7 +818,10 @@ export async function apply(ctx, config) {
   };
 
   /** Убеждается, что фоновый run действительно начал работу (а не упал на lock). */
-  const launchStarted = async (buildDir, timeoutMs = 5000) => {
+  const launchStarted = async (buildDir, settings = {}, timeoutMs = 5000) => {
+    // Тот же срок устаревания, что в cmdInit/cmdRun: иначе lock, который они
+    // уже считают осиротевшим, здесь выглядел бы как живой запуск.
+    const maxAgeMs = (Math.max(settings.startTimeout ?? 1800, settings.importTimeout ?? 3600) + 600) * 1000;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const current = workspaceState(buildDir, { alive: cheapAlive });
@@ -826,7 +829,7 @@ export async function apply(ctx, config) {
       if (current.label === 'starting' || current.label === 'ready' || current.label === 'failed') return true;
       if (phase !== undefined && phase !== 'ready' && phase !== 'failed') return true;
       // run мог только взяться за lock, ещё не записав ни progress, ни pid.
-      const runLock = lockState(join(buildDir, 'init-run.lock'));
+      const runLock = lockState(join(buildDir, 'init-run.lock'), { maxAgeMs });
       if (runLock.exists === true && runLock.stale === false) return true;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
@@ -901,7 +904,7 @@ export async function apply(ctx, config) {
           };
         }
         record.startedByUs = true;
-        if (!(await launchStarted(key))) {
+        if (!(await launchStarted(key, plan.settings))) {
           const tail = tailFile(initLog);
           return {
             ...workspaceState(key, { alive: cheapAlive }),
