@@ -3,7 +3,7 @@
 //
 // Правила апгрейда: существующие значения не меняются, недостающие ключи
 // добавляются, неизвестные ключи сохраняются, версия поднимается.
-export const CONFIG_VERSION = 2;
+export const CONFIG_VERSION = 3;
 
 /** Значения по умолчанию для нового файла. Пустые строки и массивы
  *  нормализаторы игнорируют, поэтому init ничего не включает сам по себе.
@@ -17,6 +17,22 @@ export const DEFAULTS = {
     edt: { url: 'http://127.0.0.1:8765/mcp' },
     bsl: { root: '' },
     tasks: { url: '' },
+  },
+  // Окружение EDT для git worktree: workspace в <worktree>/build/ws и свой
+  // MCP-сервер на своём порту. Поднимается только в linked worktree.
+  workspace: {
+    enabled: true,
+    root: '',
+    home: { win32: '', linux: '' },
+    vm: '',
+    xmxIde: '6g',
+    xmxImport: '8g',
+    import: 'auto',
+    importTimeout: 3600,
+    startTimeout: 1800,
+    projects: [],
+    ports: { min: 20000, max: 39999 },
+    stopOnSessionEnd: true,
   },
   tests: {
     yaxunit: { enabled: false, path: '', project: '' },
@@ -53,6 +69,23 @@ export const KNOWN = {
   'servers.bsl.mode': { type: 'string', description: 'hybrid (LSP+MCP) или stdio.' },
   'servers.bsl.mcpUrl': { type: 'string', description: 'Адрес уже запущенного BSL LS по HTTP.' },
   'servers.bsl.download': { type: 'boolean', description: 'Разрешено ли скачивание jar.' },
+  'workspace': { type: 'object', description: 'Окружение EDT для git worktree: workspace в <worktree>/build/ws и свой MCP-порт.' },
+  'workspace.enabled': { type: 'boolean', description: 'Поднимать ли EDT-окружение в worktree автоматически.' },
+  'workspace.root': { type: 'string', description: 'Корень окружения относительно корня worktree; пусто — сам worktree.' },
+  'workspace.home': { type: 'object', description: 'Каталог установки 1C:EDT по платформам.' },
+  'workspace.home.win32': { type: 'string', description: 'Каталог 1C:EDT в Windows (где 1cedt.exe).' },
+  'workspace.home.linux': { type: 'string', description: 'Каталог 1C:EDT в Linux (где 1cedt).' },
+  'workspace.vm': { type: 'string', description: 'Java для EDT; пусто — автопоиск jdk-full-17 рядом с установкой.' },
+  'workspace.xmxIde': { type: 'string', description: 'Xmx для запуска EDT, например 6g.' },
+  'workspace.xmxImport': { type: 'string', description: 'Xmx для 1cedtcli при импорте проектов.' },
+  'workspace.import': { type: 'string', description: 'Импорт проектов в новый workspace: true, false или auto.' },
+  'workspace.importTimeout': { type: 'number', description: 'Таймаут импорта 1cedtcli, секунды.' },
+  'workspace.startTimeout': { type: 'number', description: 'Ожидание готовности MCP-сервера EDT, секунды.' },
+  'workspace.projects': { type: 'array', description: 'Шаблоны EDT-проектов для импорта; пусто — автопоиск каталогов с .project.' },
+  'workspace.ports': { type: 'object', description: 'Диапазон портов MCP-сервера EDT.' },
+  'workspace.ports.min': { type: 'number', description: 'Нижняя граница диапазона портов.' },
+  'workspace.ports.max': { type: 'number', description: 'Верхняя граница диапазона портов.' },
+  'workspace.stopOnSessionEnd': { type: 'boolean', description: 'Останавливать EDT, когда закрылась последняя сессия на этом worktree.' },
   'tests.yaxunit.enabled': { type: 'boolean', description: 'Включить правила тестируемости YAxUnit.' },
   'tests.yaxunit.path': { type: 'string', description: 'Каталог тестов как образец стиля.' },
   'tests.yaxunit.project': { type: 'string', description: 'EDT-проект, в который писать тесты.' },
@@ -165,6 +198,8 @@ export function validateConfig(config) {
       warnings.push(`неизвестный ключ: ${path}`);
       return;
     }
+    // У import три допустимых значения (true, false, "auto") — своя проверка ниже.
+    if (path === 'workspace.import') return;
     const expected = KNOWN[path]?.type ?? Object.entries(KNOWN).find(([pattern]) => pattern.includes('*') && matchesPattern(path, pattern))?.[1]?.type;
     if (expected === undefined) return;
     const actual = Array.isArray(value) ? 'array' : typeof value;
@@ -180,6 +215,27 @@ export function validateConfig(config) {
     errors.push(`projects: ожидался массив путей, получено ${typeof config.projects}`);
   } else if (Array.isArray(config.projects) && !config.projects.every((item) => typeof item === 'string')) {
     errors.push('projects: ожидался массив строк');
+  }
+
+  if (isPlainObject(config.workspace)) {
+    const workspace = config.workspace;
+    if (workspace.import !== undefined && ![true, false, 'auto'].includes(workspace.import)) {
+      errors.push(`workspace.import: ожидалось true, false или "auto", получено ${JSON.stringify(workspace.import)}`);
+    }
+    if (workspace.projects !== undefined) {
+      if (!Array.isArray(workspace.projects)) errors.push('workspace.projects: ожидался массив шаблонов');
+      else if (!workspace.projects.every((item) => typeof item === 'string')) errors.push('workspace.projects: ожидался массив строк');
+    }
+    for (const key of ['importTimeout', 'startTimeout']) {
+      const value = workspace[key];
+      if (value !== undefined && (!Number.isFinite(value) || value <= 0)) errors.push(`workspace.${key}: ожидалось положительное число`);
+    }
+    if (isPlainObject(workspace.ports)) {
+      const { min, max } = workspace.ports;
+      if (min !== undefined && (!Number.isInteger(min) || min < 1 || min > 65535)) errors.push('workspace.ports.min: ожидался порт 1..65535');
+      if (max !== undefined && (!Number.isInteger(max) || max < 1 || max > 65535)) errors.push('workspace.ports.max: ожидался порт 1..65535');
+      if (Number.isInteger(min) && Number.isInteger(max) && min > max) errors.push('workspace.ports: min больше max');
+    }
   }
 
   return { errors, warnings };

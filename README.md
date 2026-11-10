@@ -32,6 +32,10 @@
   через `servers.v8std.url` или `V8STD_MCP_URL`.
 - **Настройки на проект.** Второй проект — другой `.dsh-1c.json`, без перезапуска
   DSH: порт EDT, корень исходников для BSL, вики, флаги тестов и навыков.
+- **Свой EDT- workspace в git worktree.** В linked worktree плагин сам поднимает
+  EDT в `<worktree>/build/ws` на отдельном порту, импортирует проекты и монтирует
+  `mcp__edt__*` туда — параллельные worktree не мешают друг другу и основному
+  checkout. Останавливается, когда закрылась последняя сессия.
 - **Вики проекта только для чтения.** Пути попадают в промпт, запись по ним
   отклоняется на уровне инструментов.
 - **Правила для модели.** «Исходники 1С правим только инструментами EDT», точечная
@@ -44,8 +48,11 @@
 1. **DSH 0.2.x** и профиль (`desktop` или `web`).
 2. **EDT 2026.1 / 2026.2 с установленным EDT-MCP**: Help → Install New Software →
    `https://ditrixnew.github.io/EDT-MCP/` → EDT MCP Server Feature → перезапуск.
-3. **MCP-сервер запущен**: Window → Preferences → MCP Server → Server Port и
-   автостарт. Порт по умолчанию — `8765`, плагин по умолчанию ходит туда же.
+   Для основного checkout EDT запускается вручную (п. 3); в worktree плагин находит
+   установку сам (`workspace.home` или `DSH_1C_EDT_HOME`, иначе старшая найденная).
+3. **MCP-сервер запущен в основном checkout**: Window → Preferences → MCP Server →
+   Server Port и автостарт. Порт по умолчанию — `8765`, плагин по умолчанию ходит
+   туда же. В worktree сервер поднимается сам вместе с отдельным workspace.
 4. **Plain text mode включён** (там же, *Plain text mode (Cursor compatibility)*).
    Без него EDT отдаёт результат как embedded resource, а клиент показывает вместо
    него `[embedded resource unsupported]` — и инструменты становятся бесполезны.
@@ -65,7 +72,7 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 | Способ | Что передать |
 |---|---|
 | локальные исходники | `install_bundle` с путём `C:\git\dsh-edt-plugin\packages\dsh-edt-projects` (создаёт `link:`, правки видны после пересборки профиля) |
-| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.10.0/dsh-edt-projects-0.10.0.tgz` |
+| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.12.0/dsh-edt-projects-0.12.0.tgz` |
 | Web UI | Plugins → Add plugin → тот же путь или URL |
 
 ## Где включается
@@ -85,8 +92,12 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 `C:\git\trade`), `~` раскрывается, на Windows регистр не важен. Битый JSON не
 включает проект: ошибка пишется в лог, а `edt_config` остаётся доступным.
 
-Worktree — отдельный каталог: его нужно либо добавить в `projects`, либо завести
-ему собственный `.dsh-1c.json` (например, если файл лежит в репозитории).
+**Worktree наследует включённость.** Если каталог сессии — linked git worktree,
+плагин находит его основной checkout (или репозитории первого уровня, как в task
+space у `dsh-worktree-space`) и проверяет `enabled`, `projects` и `.dsh-1c.json` по
+ним. Отдельный `.dsh-1c.json` в worktree не нужен, а если он есть (например,
+закоммичен) — он сильнее настроек основного checkout. Подробности и настройка
+окружения — в разделе «EDT-окружение в git worktree».
 
 В выключенном проекте от плагина остаётся только `edt_config` — у него же
 `action=init` создаёт `.dsh-1c.json` и тем самым включает проект на лету. В
@@ -127,6 +138,7 @@ Worktree — отдельный каталог: его нужно либо до�
     "bsl":   { "root": "C:\\git\\trade\\src\\cf" },
     "tasks": { "url": "https://tracker.example/mcp" }
   },
+  "workspace": { "import": "auto", "xmxIde": "6g" },
   "tests":  { "yaxunit": { "enabled": true, "project": "cfe_yaxunit" } },
   "sonar":  { "enabled": true },
   "gitlab": { "enabled": false }
@@ -145,6 +157,13 @@ Worktree — отдельный каталог: его нужно либо до�
 | `servers.tasks.url` | MCP-сервер трекера | не задан |
 | `servers.v8std.url` / `headers` | адрес MCP-сервера стандартов (свой инстанс) | `https://ai.v8std.ru/mcp` из `cordis.patch.yml` |
 | `wiki.paths` / `wiki.entry` | корни вики и входная страница | пусто |
+| `workspace.enabled` | поднимать ли отдельный EDT-workspace в worktree | `true` |
+| `workspace.home.win32` / `linux` | каталог установки EDT (где `1cedt.exe`); пусто — автопоиск | пусто |
+| `workspace.import` | импорт проектов в новый workspace: `true`, `false`, `"auto"` | `"auto"` |
+| `workspace.projects` | шаблоны EDT-проектов для импорта; пусто — все каталоги с `.project` до 3 уровней | пусто |
+| `workspace.ports.min` / `max` | диапазон портов MCP-сервера worktree | `20000–39999` |
+| `workspace.xmxIde` / `xmxImport` | память EDT и `1cedtcli` | `6g` / `8g` |
+| `workspace.stopOnSessionEnd` | останавливать EDT после последней сессии на worktree | `true` |
 | `tests.yaxunit` / `tests.vanessa` | правила тестируемости | выключены |
 | `sonar.enabled` / `sonar.projectKey` | навык SonarQube | выключен |
 | `gitlab.enabled` | навык GitLab | выключен |
@@ -175,6 +194,7 @@ node tools/config-init.mjs --dry-run  # показать, что добавит�
 | `wiki.paths`, `servers.bsl.root` | сразу: читаются на каждый запрос и `edt_pin` |
 | `servers.<name>.url`, `headers` | `edt_reload("edt")` — сервер переподключится |
 | `enabled`, `projects` | сразу: на следующем шаге сессии |
+| `workspace.*` | `edt_workspace action=restart` — подъём идёт по снимку настроек |
 | `cordis.patch.yml`, переменные окружения | только перезапуск DSH |
 
 Переменные окружения — для разовых запусков и CI:
@@ -190,6 +210,98 @@ node tools/config-init.mjs --dry-run  # показать, что добавит�
 | `DSH_1C_BSL_LS_GITHUB_TOKEN` | токен GitHub для API (иначе `GITHUB_TOKEN`, `GH_TOKEN`) |
 | `DSH_1C_BSL_LS_CACHE`, `DSH_1C_BSL_LS_DOWNLOAD` | каталог кэша и запрет скачивания |
 | `DSH_1C_BSL_LS_ROOT`, `DSH_1C_BSL_LS_CWD` | корень рабочего пространства и рабочий каталог LS |
+| `DSH_1C_EDT_HOME` | каталог установки EDT для worktree (перекрывает `workspace.home`) |
+| `DSH_1C_EDT_IMPORT` | `1`/`0` — импортировать ли проекты в workspace worktree |
+
+## EDT-окружение в git worktree
+
+Основной checkout работает с одним EDT, запущенным вручную, — и это правильно:
+он один. Параллельные worktree так работать не могут: у каждого свой набор
+исходников, а один EDT- workspace показывает один набор проектов. Поэтому в linked
+worktree плагин поднимает **отдельное окружение** и монтирует `mcp__edt__*` на его
+порт.
+
+```text
+<worktree>/build/
+├── ws/                              EDT workspace (-data) с prefs MCP-сервера
+├── logs/init.log | edt.log | edt-import.log
+├── workspace.json                   снимок настроек, по которому поднимали
+├── edt-mcp-port | edt-mcp.pid
+├── edt-mcp-ready | edt-mcp-failed   маркеры готовности
+├── edt-imported | import.script
+└── init-progress.json               фаза подъёма для статуса
+```
+
+Что происходит при создании сессии в worktree:
+
+1. Плагин видит linked worktree и наследует включённость от основного checkout.
+2. Занимает свободный порт из `workspace.ports`, пишет prefs MCP-сервера
+   (`mcpServerAutoStart=true`, порт) и снимок настроек в `build/workspace.json`.
+3. Запускает в фоне `init`: при необходимости импортирует EDT-проекты
+   (`1cedtcli`), стартует `1cedt` с `-data build/ws` и ждёт `/health`.
+   Первый запуск — 1–3 минуты, с импортом дольше.
+4. Монтирует `edt` на `http://127.0.0.1:<порт>/mcp` с реконнектом: инструменты
+   появляются, как только сервер поднялся, а неудачное стартовое подключение не
+   валит сессию.
+5. Когда закрылась последняя сессия на этом worktree, останавливает EDT, если его
+   поднял сам (`workspace.stopOnSessionEnd`, по умолчанию `true`). Окружение,
+   поднятое opencode, плагин принимает и не останавливает.
+
+Состояние, порт, фазу и логи показывает `edt_workspace`:
+
+| Действие | Что делает |
+|---|---|
+| `status` | корень, `build/ws`, состояние (`absent`/`stopped`/`starting`/`ready`/`stale`/`failed`), порт, pid, фаза, число импортированных проектов, предупреждения |
+| `init` | поднять (или повторить неудачный запуск); возвращается сразу, работа идёт в фоне |
+| `stop` | остановить EDT этого worktree |
+| `restart` | остановить и поднять заново; `import: true` — заново импортировать проекты |
+| `import` | импорт при остановленном EDT (если запущен — подскажет `restart`) |
+
+Настройки — в обычных файлах плагина, секция `workspace`:
+
+```json
+{
+  "workspace": {
+    "home": { "win32": "C:\\Program Files\\1C\\1CE\\components\\1c-edt-2026.1.2+2-x86_64" },
+    "root": "",
+    "import": "auto",
+    "projects": ["src/cf", "src/cfe/*", "src/epf/*"],
+    "xmxIde": "6g",
+    "ports": { "min": 20000, "max": 39999 },
+    "stopOnSessionEnd": true
+  }
+}
+```
+
+- `workspace.home` пустой — плагин берёт старшую найденную установку EDT
+  (`C:\Program Files\1C\1CE\components\1c-edt-*`, `/opt/1C/1CE/components`),
+  предпочитая ту, где в `plugins`/`features` есть EDT-MCP. Java ищется рядом
+  (`jdk-full-17`), `workspace.vm` перекрывает.
+- `workspace.import: "auto"` импортирует, только если в workspace ещё нет
+  проектов. `true` — импортировать по списку `workspace.projects` (пусто — все
+  каталоги с `.project` до трёх уровней), `false` — не импортировать (проекты
+  можно добавить в EDT вручную).
+- `workspace.root` пустой — окружение в корне worktree. Если в task space
+  несколько включённых репозиториев, берётся первый по сортировке и в `status`
+  появляется предупреждение; `workspace.root` (абсолютный или относительный от
+  корня worktree) выбирает нужный.
+- `build/` должен быть в `.gitignore` репозитория (у типовых 1С-проектов уже там).
+  Если это не так, `status` предупредит; чужие `.gitignore` плагин не правит.
+
+Уборка без DSH:
+
+```text
+node tools/edt-workspace.mjs status --root <worktree>
+node tools/edt-workspace.mjs stop   --root <worktree>
+node tools/edt-workspace.mjs stop-all --repo C:\git\trade
+```
+
+Окружение поднимается только в **linked worktree**. Обычный каталог, основной
+checkout и выключенный проект ничего не запускают — там работает EDT из
+`servers.edt.url`. Механизм не зависит от конкретного плагина worktree: подходит
+`git worktree add`, task space из `dsh-worktree-space`, worktree opencode и
+экспериментальный `create_worktree` DSH — плагин определяет worktree по `.git`-
+файлу и `commondir`, без вызова git и без чужих событий.
 
 ## Серверы по требованию
 
@@ -203,8 +315,9 @@ node tools/config-init.mjs --dry-run  # показать, что добавит�
 | `edt_pin` | монтирует сервер; его инструменты появляются в следующем же запросе модели |
 | `edt_unpin` | снимает сервер и освобождает контекст |
 | `edt_reload` | перечитывает настройки и перезапускает серверы с изменившимся конфигом |
+| `edt_workspace` | окружение EDT в worktree: `status`/`init`/`stop`/`restart`/`import` |
 
-`edt_config` доступен всегда — им включают проект. Остальные четыре видны только
+`edt_config` доступен всегда — им включают проект. Остальные пять видны только
 во включённом проекте.
 
 EDT монтируется при создании сессии включённого проекта (`lazy: false`), BSL LS,
@@ -334,7 +447,9 @@ MCP-эндпоинтом `https://ai.v8std.ru/mcp` (страница `v8std.ru/m
 | `edt_pin("v8std")` не подключается | проверить `V8STD_MCP_URL` / `servers.v8std.url`, доступ к сети или свой инстанс; без него стандарты можно смотреть на [v8std.ru](https://v8std.ru) |
 | правки не видны в EDT | править через `edt__*`; после ручной правки — `revalidate_objects` или `resync_to_disk` |
 | плагин не появился в списке | `plugin_manager list_bundles`; проверить, что версия DSH ≥ 0.2.0 |
-| проект в worktree не включён | worktree — отдельный каталог: добавить его в `projects` или завести свой `.dsh-1c.json` |
+| в worktree нет `mcp__edt__*` | `edt_workspace action=status`: `starting` — подождать (первый запуск 1–3 мин), `failed` — смотреть `build/logs/edt.log`, `off` — проверить, что это linked worktree и проект включён |
+| `edt_workspace status`: EDT не найден | задать `workspace.home.win32` или `DSH_1C_EDT_HOME`; проверить, что в этой установке есть EDT-MCP (плагин напишет предупреждение) |
+| импорт в worktree упал | `build/logs/edt-import.log`; повторить `edt_workspace action=init`, при необходимости `restart` с `import: true` или `workspace.import: false` |
 | после переименования каталога плагина ошибки про старый путь | переустановить плагин: `remove_bundle`, затем `install_bundle` |
 
 Живая проверка без DSH: `npm run check:edt` — печатает версию сервера, число
@@ -351,10 +466,12 @@ tools/                       проверки, тесты, smoke, заглушк
 ```text
 npm ci               # зависимости проверок
 npm run validate     # манифест, патч, локали, иконка, готовность к публикации, порт
-npm test             # 116 проверок: правила, BSL, конфиг, включение, вики, тесты, схема, навыки, cwd
+npm test             # 186 проверок: правила, BSL, конфиг, включение, worktree, окружение, вики, схема, навыки, cwd
 npm run pack:check   # состав tarball
 npm run check:edt    # живой MCP-сервер EDT
 npm run smoke        # прогон бандла в одноразовом профиле DSH
+npm run workspace -- status --root <worktree>   # окружение worktree без DSH
+npm run workspace:stop-all -- --repo C:\git\trade
 ```
 
 Smoke ставит бандл из `dist/*.tgz` в одноразовый `DSH_HOME`, проверяет композицию
@@ -371,7 +488,7 @@ EDT — задайте `SMOKE_PORT`.
 
 ## Версионирование
 
-Проект в статусе беты и версионируется как **0.x** (текущая — `v0.10.0`). Между 0.x
+Проект в статусе беты и версионируется как **0.x** (текущая — `v0.12.0`). Между 0.x
 без миграции могут меняться ключи конфига, имена инструментов и структура
 `cordis.patch.yml`; `edt_config upgrade` дополняет файл, но совместимость не
 гарантирует. Версия 1.0.0 будет означать зафиксированный API. История — в
@@ -380,3 +497,4 @@ EDT — задайте `SMOKE_PORT`.
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
+

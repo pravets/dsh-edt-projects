@@ -11,7 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
-import { DEFAULTS } from '../packages/dsh-edt-projects/lib/schema.mjs';
+import { DEFAULTS, isKnownPath } from '../packages/dsh-edt-projects/lib/schema.mjs';
 import { TOOL_NAMES } from '../packages/dsh-edt-projects/lib/index.js';
 
 // `yaml` подключается как CommonJS, поэтому берём его default-экспорт.
@@ -327,6 +327,24 @@ if (!existsSync(iconPath)) {
   if (!/viewBox\s*=/.test(svg)) fail('icon.svg: нет viewBox — иконка будет масштабироваться непредсказуемо');
   if (!svg.trimEnd().endsWith('</svg>')) fail('icon.svg: нет закрывающего </svg>');
   if (!problems.some((p) => p.startsWith('icon.svg'))) pass('icon.svg: корректна');
+}
+
+// --- ключи окружения worktree ---------------------------------------------
+// Каждый лист DEFAULTS.workspace должен быть описан в KNOWN: иначе `upgrade`
+// добавит ключ, а валидация объявит его неизвестным.
+const workspaceLeaves = (value, prefix = '') =>
+  Object.entries(value ?? {}).flatMap(([key, child]) => {
+    const path = prefix === '' ? key : `${prefix}.${key}`;
+    return child !== null && typeof child === 'object' && !Array.isArray(child)
+      ? workspaceLeaves(child, path)
+      : [path];
+  });
+const workspaceKeys = workspaceLeaves(DEFAULTS?.workspace).map((path) => `workspace.${path}`);
+const unknownWorkspace = workspaceKeys.filter((path) => !isKnownPath(path));
+if (unknownWorkspace.length > 0) {
+  fail(`DEFAULTS.workspace: ключи без описания в KNOWN — ${unknownWorkspace.join(', ')}`);
+} else {
+  pass(`workspace: ${workspaceKeys.length} ключ(ей) по умолчанию описаны в схеме`);
 }
 
 // --- сверка с тегом --------------------------------------------------------

@@ -5,7 +5,7 @@
 // без перезапуска DSH; разбор кэшируется по mtimeMs.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const USER_FILE = 'dsh-1c.json';
 const PROJECT_FILE = '.dsh-1c.json';
@@ -73,10 +73,37 @@ export function mergeLayers(...layers) {
 }
 
 /**
- * Собирает действующие настройки: база (патч) <- пользователь <- проект.
+ * Каталоги, чьи `.dsh-1c.json` образуют слои проекта.
+ *
+ * Обычная сессия передаёт только `cwd`. Для worktree вызывающий передаёт
+ * `[cwd, repo, mainRoot]`: настройки основного checkout (в нём файл может быть
+ * незакоммиченным) действуют и в worktree, а файл самого worktree — сильнее.
+ * Порядок сохраняется, дубликаты путей схлопываются.
+ */
+export function projectDirs({ cwd, projectCwds } = {}) {
+  const list = Array.isArray(projectCwds) && projectCwds.length > 0 ? projectCwds : [cwd];
+  const seen = new Set();
+  const out = [];
+  for (const dir of list) {
+    if (typeof dir !== 'string' || dir === '') continue;
+    let key;
+    try {
+      key = resolve(dir);
+    } catch {
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(dir);
+  }
+  return out;
+}
+
+/**
+ * Собирает действующие настройки: база (патч) <- пользователь <- файлы проектов.
  * @returns {{ config: object, sources: string[], errors: string[] }}
  */
-export function resolveConfig({ cwd, env = process.env, base = {} } = {}) {
+export function resolveConfig({ cwd, projectCwds, env = process.env, base = {} } = {}) {
   const sources = [];
   const errors = [];
 
@@ -84,12 +111,18 @@ export function resolveConfig({ cwd, env = process.env, base = {} } = {}) {
   if (user.error !== undefined) errors.push(user.error);
   if (user.config !== undefined) sources.push(userConfigPath(env));
 
-  const projectPath = projectConfigPath(cwd);
-  const project = readJsonConfig(projectPath);
-  if (project.error !== undefined) errors.push(project.error);
-  if (project.config !== undefined && projectPath !== undefined) sources.push(projectPath);
+  const layers = [];
+  for (const dir of projectDirs({ cwd, projectCwds })) {
+    const projectPath = projectConfigPath(dir);
+    if (projectPath === undefined) continue;
+    const project = readJsonConfig(projectPath);
+    if (project.error !== undefined) errors.push(project.error);
+    if (project.config === undefined) continue;
+    sources.push(projectPath);
+    layers.push(project.config);
+  }
 
-  return { config: mergeLayers(base, user.config, project.config), sources, errors };
+  return { config: mergeLayers(base, user.config, ...layers), sources, errors };
 }
 
 /**

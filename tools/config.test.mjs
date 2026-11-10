@@ -9,6 +9,7 @@ import {
   mergeLayers,
   projectConfigLoaded,
   projectConfigPath,
+  projectDirs,
   readJsonConfig,
   resolveConfig,
   userConfigPath,
@@ -103,6 +104,47 @@ test('кэш: тот же mtime — старое значение, новый mt
   const later = new Date('2026-01-02T00:00:00Z');
   utimesSync(path, later, later);
   assert.equal(readJsonConfig(path).config.marker, 'second');
+});
+
+test('resolveConfig: projectCwds задаёт слои worktree (main < repo < cwd)', () => {
+  clearConfigCache();
+  const home = tempDir();
+  const main = tempDir();
+  const repo = tempDir();
+  const cwd = tempDir();
+  writeJson(join(home, 'dsh-1c.json'), { servers: { bsl: { root: 'C:\\user' } } });
+  writeJson(join(main, '.dsh-1c.json'), { servers: { edt: { url: 'http://main' }, bsl: { root: 'C:\\main' } }, workspace: { xmxIde: '4g' } });
+  writeJson(join(repo, '.dsh-1c.json'), { servers: { edt: { url: 'http://repo' } } });
+  writeJson(join(cwd, '.dsh-1c.json'), { workspace: { xmxIde: '8g' } });
+
+  const { config, sources, errors } = resolveConfig({
+    cwd,
+    projectCwds: [main, repo, cwd, repo],
+    env: { DSH_HOME: home },
+    base: {},
+  });
+
+  assert.equal(config.servers.edt.url, 'http://repo', 'файл worktree сильнее main');
+  assert.equal(config.servers.bsl.root, 'C:\\main', 'значение из main сохраняется, если ниже его не перекрыли');
+  assert.equal(config.workspace.xmxIde, '8g', 'cwd сильнее всех');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(sources, [join(home, 'dsh-1c.json'), join(main, '.dsh-1c.json'), join(repo, '.dsh-1c.json'), join(cwd, '.dsh-1c.json')]);
+});
+
+test('resolveConfig: projectCwds без cwd читает только переданные каталоги', () => {
+  clearConfigCache();
+  const main = tempDir();
+  const cwd = tempDir();
+  writeJson(join(main, '.dsh-1c.json'), { enabled: true });
+  const { config, sources } = resolveConfig({ cwd, projectCwds: [main], env: { DSH_HOME: tempDir() }, base: {} });
+  assert.equal(config.enabled, true);
+  assert.deepEqual(sources, [join(main, '.dsh-1c.json')]);
+});
+
+test('projectDirs раскрывает cwd по умолчанию и схлопывает дубликаты', () => {
+  assert.deepEqual(projectDirs({ cwd: '/wt' }), ['/wt']);
+  const dirs = projectDirs({ cwd: '/wt', projectCwds: ['/main', '/wt', '/main/'] });
+  assert.deepEqual(dirs, ['/main', '/wt']);
 });
 
 test('пути файлов настроек', () => {

@@ -11,21 +11,29 @@ SonarQube/GitLab.
 остальных проектах в контексте остаётся только `edt_config`, которым проект и
 включается.
 
+В **linked git worktree** плагин поднимает отдельное окружение EDT
+(`<worktree>/build/ws`, свой порт и логи), импортирует проекты и монтирует
+`mcp__edt__*` туда; включённость и настройки наследуются от основного checkout.
+Управление — инструмент `edt_workspace`.
+
 ## Установка
 
 ```text
 plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 ```
 
-Нужны EDT 2026.1/2026.2 с установленным EDT-MCP и запущенным MCP-сервером
-(по умолчанию `127.0.0.1:8765`) — подробности и настройка в
+Нужны EDT 2026.1/2026.2 с установленным EDT-MCP. В основном checkout MCP-сервер
+запускается вручную (по умолчанию `127.0.0.1:8765`); в worktree плагин находит
+установку EDT сам или по `workspace.home`/`DSH_1C_EDT_HOME` и поднимает её.
+Подробности и настройка — в
 [README репозитория](https://github.com/pravets/dsh-edt-projects#readme).
 
 ## Что внутри
 
 - `lib/` — хаб MCP-серверов: активация по проекту, монтаж по требованию
   (`edt_pin`), настройки на проект, правила для системного промпта, провайдер
-  навыков.
+  навыков; `repo.mjs`/`workspace.mjs`/`workspace-run.mjs` — определение worktree,
+  подъём и остановка EDT-окружения в `build/`.
 - `skills/` — навыки `edt-mcp-project-sonar` и `edt-mcp-project-gitlab`,
   включаются флагами `sonar.enabled` и `gitlab.enabled` внутри включённого
   проекта.

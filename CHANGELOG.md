@@ -10,6 +10,50 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-10
+
+### Добавлено
+
+- **EDT-окружение для git worktree.** В linked worktree плагин сам поднимает
+  отдельный workspace EDT в `<worktree>/build/ws`: свой порт MCP-сервера, prefs,
+  логи, маркеры и импорт проектов через `1cedtcli`. `mcp__edt__*` монтируется на
+  порт этого окружения, поэтому параллельные worktree и основной checkout больше
+  не делят один workspace. В обычном каталоге и основном checkout ничего не
+  стартует: там работает EDT из `servers.edt.url`.
+- **Наследование включённости и настроек от основного checkout.** Сессия в
+  worktree (в том числе в task space `dsh-worktree-space`, где репозитории лежат
+  на первом уровне) видит `enabled`, `projects` и `.dsh-1c.json` основного
+  checkout — отдельный файл в worktree не обязателен.
+- **Инструмент `edt_workspace`**: `status` (состояние, порт, фаза, логи,
+  предупреждения), `init`, `stop`, `restart`, `import`. В правилах модели
+  появился блок про окружение worktree и `build/ws`.
+- Схема настроек v3: секция `workspace` — `enabled`, `root`, `home`, `vm`,
+  `xmxIde`, `xmxImport`, `import` (`true`/`false`/`"auto"`), `importTimeout`,
+  `startTimeout`, `projects`, `ports`, `stopOnSessionEnd`. Переменные
+  `DSH_1C_EDT_HOME` и `DSH_1C_EDT_IMPORT`.
+- Автопоиск установки EDT (старшая версия; предпочтение — где есть EDT-MCP) и
+  Java (`jdk-full-17` рядом с установкой). `edt_workspace status` предупреждает,
+  если бандла EDT-MCP в установке не видно.
+- Остановка EDT после последней сессии на worktree (`workspace.stopOnSessionEnd`,
+  по умолчанию включена); окружение, поднятое opencode, принимается по совместимым
+  маркерам и не останавливается.
+- CLI `tools/edt-workspace.mjs` (`npm run workspace`, `npm run workspace:stop-all`)
+  для работы с окружением без DSH.
+
+### Изменено
+
+- **Корень BSL LS по умолчанию — корень проекта/workspace, а не каталог запуска
+  DSH.** Относительный `servers.bsl.root` считается от него же. Это убирает
+  ошибку `File is not part of any registered workspace`, когда сессия открыта в
+  task space, а конфигурация лежит в подкаталоге репозитория.
+
+### Проверки
+
+- 186 тестов: добавлены `repo.test.mjs` (worktree и task space без git),
+  `workspace.test.mjs` (настройки, проекты, порт, установка EDT, состояние),
+  `workspace-run.test.mjs` (подъём, импорт, ошибки, остановка) и кейсы
+  наследования в `config`/`enable`/`rules`/`schema`.
+
 ## [0.11.0] - 2026-11-09
 
 ### Добавлено
@@ -388,3 +432,4 @@
 - GitHub Actions: `ci.yml` (валидация на push/PR) и `release.yml`
   (tarball в GitHub Release по тегу `v*`).
 - MIT-лицензия.
+
