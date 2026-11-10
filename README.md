@@ -3,6 +3,7 @@
 [![CI](https://github.com/pravets/dsh-edt-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/pravets/dsh-edt-projects/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/pravets/dsh-edt-projects)](https://github.com/pravets/dsh-edt-projects/blob/master/LICENSE)
 [![Telegram](https://telegram-badge.vercel.app/api/telegram-badge?channelId=@pravets_IT)](https://t.me/+GKGRmAwghxllYzIy)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 Плагин [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) для
 разработки на 1С. Держит подключённым **1C:EDT** через
@@ -72,7 +73,7 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 | Способ | Что передать |
 |---|---|
 | локальные исходники | `install_bundle` с путём `C:\git\dsh-edt-plugin\packages\dsh-edt-projects` (создаёт `link:`, правки видны после пересборки профиля) |
-| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.12.0/dsh-edt-projects-0.12.0.tgz` |
+| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.12.1/dsh-edt-projects-0.12.1.tgz` |
 | Web UI | Plugins → Add plugin → тот же путь или URL |
 
 ## Где включается
@@ -164,6 +165,8 @@ space у `dsh-worktree-space`) и проверяет `enabled`, `projects` и `.
 | `workspace.ports.min` / `max` | диапазон портов MCP-сервера worktree | `20000–39999` |
 | `workspace.xmxIde` / `xmxImport` | память EDT и `1cedtcli` | `6g` / `8g` |
 | `workspace.stopOnSessionEnd` | останавливать EDT после последней сессии на worktree | `true` |
+| `workspace.plainText` | Plain text mode вместо embedded resource (DSH их не рендерит) | `true` |
+| `workspace.formScreenshots` | включить `get_form_screenshot` и JVM-флаг `nativeFormBufferedLayoutRender` | `true` |
 | `tests.yaxunit` / `tests.vanessa` | правила тестируемости | выключены |
 | `sonar.enabled` / `sonar.projectKey` | навык SonarQube | выключен |
 | `gitlab.enabled` | навык GitLab | выключен |
@@ -302,6 +305,35 @@ checkout и выключенный проект ничего не запуска
 `git worktree add`, task space из `dsh-worktree-space`, worktree opencode и
 экспериментальный `create_worktree` DSH — плагин определяет worktree по `.git`-
 файлу и `commondir`, без вызова git и без чужих событий.
+
+## Совместно с dsh-git-worktree
+
+Плагин рассчитан на работу с [dsh-git-worktree](https://github.com/LaoYueHanNi/dsh-git-worktree): он создаёт
+изолированный worktree в `<repo>/.dsh/gitworktree/<branch>/`, регистрирует его как обычный DSH
+Workspace и открывает там сессию.
+
+- Специальной настройки не нужно: worktree определяется по `.git`-файлу и `commondir`, поэтому
+  in-repo layout и legacy `~/.dsh/gitworktree` поддерживаются одинаково.
+- Если сессия открыта в основном checkout, но `workingDirectory` указывает в worktree этого же
+  репозитория, плагин считает проектом worktree и поднимает окружение там.
+- `build/` окружения лежит внутри worktree, который и так исключён из git; освобождать каталог
+  вручную не требуется.
+- Перед удалением worktree закройте сессию (`stopOnSessionEnd` остановит EDT) или вызовите
+  `edt_workspace action=stop`.
+
+### Скриншоты форм и plain text
+
+DSH не рендерит embedded resource, поэтому в workspace сразу включаются:
+
+- `mcpPlainTextMode=true` — EDT-MCP отдаёт markdown/текст вместо resource (`list_projects`,
+  `get_project_errors` и т.д.). Настройка `workspace.plainText: false` возвращает прежнее
+  поведение сервера.
+- `mcpDisabledTools` без `get_form_screenshot` и JVM-флаг
+  `-DnativeFormBufferedLayoutRender=true` после `-vmargs` — иначе `get_form_screenshot` на Windows
+  не работает. Настройка `workspace.formScreenshots: false` выключает и флаг, и инструмент.
+  На Windows этот флаг включает буферизованный рендер форм на всю сессию EDT: собственный
+  дизайнер форм показывает серый прямоугольник — это поведение EDT, а не плагина. Смена
+  флага требует перезапуска окружения (`edt_workspace action=restart`).
 
 ## Серверы по требованию
 
@@ -447,9 +479,12 @@ MCP-эндпоинтом `https://ai.v8std.ru/mcp` (страница `v8std.ru/m
 | `edt_pin("v8std")` не подключается | проверить `V8STD_MCP_URL` / `servers.v8std.url`, доступ к сети или свой инстанс; без него стандарты можно смотреть на [v8std.ru](https://v8std.ru) |
 | правки не видны в EDT | править через `edt__*`; после ручной правки — `revalidate_objects` или `resync_to_disk` |
 | плагин не появился в списке | `plugin_manager list_bundles`; проверить, что версия DSH ≥ 0.2.0 |
-| в worktree нет `mcp__edt__*` | `edt_workspace action=status`: `starting` — подождать (первый запуск 1–3 мин), `failed` — смотреть `build/logs/edt.log`, `off` — проверить, что это linked worktree и проект включён |
-| `edt_workspace status`: EDT не найден | задать `workspace.home.win32` или `DSH_1C_EDT_HOME`; проверить, что в этой установке есть EDT-MCP (плагин напишет предупреждение) |
-| импорт в worktree упал | `build/logs/edt-import.log`; повторить `edt_workspace action=init`, при необходимости `restart` с `import: true` или `workspace.import: false` |
+| в worktree нет `mcp__edt__*` | `edt_workspace action=status`: `starting` — подождать (импорт 19 проектов ≈ 11 мин), `failed` — смотреть `build/logs/edt.log`, `off` — проверить, что это linked worktree и проект включён |
+| `edt_workspace status`: «EDT-MCP не подтверждён по файлам» | это только эвристика: бандл может стоять в пользовательской `~/.eclipse/...`; готовность подтверждает `/health` после `ready` |
+| `edt_workspace status`: EDT не найден | задать `workspace.home.win32` или `DSH_1C_EDT_HOME` |
+| EDT падает сразу после старта, `failed` за секунды | проверить `status` → «Java … (EDT требует N)»; задать `workspace.vm` на `jdk-full-<N>` или убрать `-vm` |
+| импорт в worktree завис/упал | прогресс и хвост — в `build/ws/.metadata/.log` (он же digest в `build/logs/edt-import.log`); повторить `edt_workspace action=init`, при необходимости `restart` с `import: true` |
+| `get_form_screenshot` нет в `tools/list` | `workspace.formScreenshots` должен быть `true`; после `restart` проверить prefs `mcpDisabledTools` и флаг `-DnativeFormBufferedLayoutRender=true` |
 | после переименования каталога плагина ошибки про старый путь | переустановить плагин: `remove_bundle`, затем `install_bundle` |
 
 Живая проверка без DSH: `npm run check:edt` — печатает версию сервера, число
@@ -466,7 +501,7 @@ tools/                       проверки, тесты, smoke, заглушк
 ```text
 npm ci               # зависимости проверок
 npm run validate     # манифест, патч, локали, иконка, готовность к публикации, порт
-npm test             # 186 проверок: правила, BSL, конфиг, включение, worktree, окружение, вики, схема, навыки, cwd
+npm test             # 201 проверка: правила, BSL, конфиг, включение, worktree, окружение, вики, схема, навыки, cwd
 npm run pack:check   # состав tarball
 npm run check:edt    # живой MCP-сервер EDT
 npm run smoke        # прогон бандла в одноразовом профиле DSH
@@ -488,7 +523,7 @@ EDT — задайте `SMOKE_PORT`.
 
 ## Версионирование
 
-Проект в статусе беты и версионируется как **0.x** (текущая — `v0.12.0`). Между 0.x
+Проект в статусе беты и версионируется как **0.x** (текущая — `v0.12.1`). Между 0.x
 без миграции могут меняться ключи конфига, имена инструментов и структура
 `cordis.patch.yml`; `edt_config upgrade` дополняет файл, но совместимость не
 гарантирует. Версия 1.0.0 будет означать зафиксированный API. История — в
