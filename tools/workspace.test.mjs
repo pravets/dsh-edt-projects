@@ -2,9 +2,9 @@
 // состояния, определение установки EDT и готовность.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 
 import {
   detectEdtHome,
@@ -16,16 +16,22 @@ import {
   hasMcpBundle,
   healthUrl,
   importArgs,
+  importDigest,
+  importMemoryWarning,
   importScriptText,
   isPortFree,
+  mcpEvidence,
   mergePrefsText,
   normalizeWorkspaceSettings,
+  parseImportProgress,
   pickFreePort,
   prefsPath,
   prepareWorkspaceSnapshot,
   probeHealth,
+  readFromOffset,
   readPort,
   removeStamp,
+  requiredJava,
   resolveEdtVm,
   resolveWorkspaceTarget,
   stateOf,
@@ -305,20 +311,20 @@ test('detectEdtHome: явная настройка и DSH_1C_EDT_HOME', () => {
   try {
     const home = join(dir, '1c-edt-2026.1.2+2-x86_64');
     touch(join(home, '1cedt.exe'));
-    const fromConfig = detectEdtHome(normalizeWorkspaceSettings({ home: { win32: home } }), { platform: 'win32', env: {} });
+    const fromConfig = detectEdtHome(normalizeWorkspaceSettings({ home: { win32: home } }), { platform: 'win32', env: {}, eclipseRoots: [] });
     assert.equal(fromConfig.home, home);
     assert.equal(fromConfig.source, 'config');
     assert.equal(fromConfig.mcpBundle, false);
     assert.equal(fromConfig.cli, undefined, 'без 1cedtcli импорт невозможен');
 
     touch(join(home, '1cedtcli.exe'));
-    const withCli = detectEdtHome(normalizeWorkspaceSettings({ home: { win32: home } }), { platform: 'win32', env: {} });
+    const withCli = detectEdtHome(normalizeWorkspaceSettings({ home: { win32: home } }), { platform: 'win32', env: {}, eclipseRoots: [] });
     assert.equal(withCli.cli, join(home, '1cedtcli.exe'));
 
-    const fromEnv = detectEdtHome(normalizeWorkspaceSettings({}), { platform: 'win32', env: { DSH_1C_EDT_HOME: home } });
+    const fromEnv = detectEdtHome(normalizeWorkspaceSettings({}), { platform: 'win32', env: { DSH_1C_EDT_HOME: home }, eclipseRoots: [] });
     assert.equal(fromEnv.source, 'env');
 
-    const missing = detectEdtHome(normalizeWorkspaceSettings({ home: { win32: join(dir, 'none') } }), { platform: 'win32', env: {} });
+    const missing = detectEdtHome(normalizeWorkspaceSettings({ home: { win32: join(dir, 'none') } }), { platform: 'win32', env: {}, eclipseRoots: [] });
     assert.match(missing.error, /1cedt\.exe/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -336,10 +342,10 @@ test('detectEdtHome: автопоиск старшей версии и пред�
     touch(join(newer, 'plugins', 'com.ditrix.edt.mcp.server_1.27.0', 'plugin.xml'));
     touch(join(dir, '1c-edt-start-0.10.0+448-x86_64', '1cedtstart.exe'));
 
-    const chosen = detectEdtHome(normalizeWorkspaceSettings({}), { platform: 'win32', env: {}, roots });
+    const chosen = detectEdtHome(normalizeWorkspaceSettings({}), { platform: 'win32', env: {}, roots, eclipseRoots: [] });
     assert.equal(chosen.home, newer);
     assert.equal(chosen.mcpBundle, true);
-    assert.equal(hasMcpBundle(older), false);
+    assert.equal(hasMcpBundle(older, { platform: 'win32', eclipseRoots: [] }), false);
 
     const none = detectEdtHome(normalizeWorkspaceSettings({}), { platform: 'win32', env: {}, roots: [join(dir, 'empty')] });
     assert.match(none.error, /не найден/);
@@ -421,6 +427,151 @@ test('tailFile и formatElapsed', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('requiredJava читает major и -vm из 1cedt.ini', () => {
+  const dir = tempDir();
+  try {
+    const home = join(dir, '1c-edt-2026.2.2+21-x86_64');
+    touch(join(home, '1cedt.exe'));
+    const vm = join(dir, 'jdk-25', 'bin', 'javaw.exe');
+    writeFileSync(join(home, '1cedt.ini'), `-vm\n${vm}\n-vmargs\n-Dosgi.requiredJavaVersion=25\n`, 'utf8');
+    const required = requiredJava(home);
+    assert.equal(required.major, 25);
+    assert.equal(required.vm, path.normalize(vm));
+    assert.deepEqual(requiredJava(join(dir, 'missing')), { major: undefined, vm: undefined });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveEdtVm: major из ini (25), а не жёсткий 17', () => {
+  const dir = tempDir();
+  try {
+    const components = join(dir, 'components');
+    const home = join(components, '1c-edt-2026.2.2+21-x86_64');
+    touch(join(home, '1cedt.exe'));
+    const jdk17 = join(components, 'axiom-jdk-full-17.0.16+12-x86_64', 'bin');
+    const jdk25 = join(components, 'axiom-jdk-full-25.0.4+5-x86_64', 'bin');
+    touch(join(jdk17, 'javaw.exe'));
+    touch(join(jdk25, 'javaw.exe'));
+    writeFileSync(join(home, '1cedt.ini'), '-vmargs\n-Dosgi.requiredJavaVersion=25\n', 'utf8');
+
+    assert.equal(resolveEdtVm(normalizeWorkspaceSettings({}), home, { platform: 'win32', env: {} }), join(jdk25, 'javaw.exe'));
+
+    writeFileSync(join(home, '1cedt.ini'), '-vmargs\n-Dosgi.requiredJavaVersion=21\n', 'utf8');
+    assert.equal(resolveEdtVm(normalizeWorkspaceSettings({}), home, { platform: 'win32', env: {} }), join(jdk25, 'javaw.exe'));
+
+    writeFileSync(join(home, '1cedt.ini'), '-vmargs\n', 'utf8');
+    assert.equal(resolveEdtVm(normalizeWorkspaceSettings({}), home, { platform: 'win32', env: {} }), join(jdk25, 'javaw.exe'));
+
+    assert.equal(
+      resolveEdtVm(normalizeWorkspaceSettings({ vm: 'C:/explicit/java' }), home, { platform: 'win32', env: {} }),
+      'C:/explicit/java',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mcpEvidence находит бандл в пользовательской configuration area', () => {
+  const dir = tempDir();
+  try {
+    const home = join(dir, '1c-edt-2026.2.2+21-x86_64');
+    touch(join(home, '1cedt.exe'));
+    const eclipseRoot = join(dir, '.eclipse');
+    const area = join(eclipseRoot, 'org.eclipse.platform_4.38.0_1');
+    const bundles = join(area, 'configuration', 'org.eclipse.equinox.simpleconfigurator', 'bundles.info');
+    touch(bundles, 'com.ditrix.edt.mcp.server,2.23.1,../../plugins/com.ditrix.edt.mcp.server_2.23.1.jar,4,false\n');
+
+    const evidence = mcpEvidence(home, { platform: 'win32', eclipseRoots: [eclipseRoot] });
+    assert.equal(evidence.found, true);
+    assert.ok(evidence.evidence.some((line) => line.endsWith('bundles.info')));
+
+    touch(join(home, 'plugins', 'com.ditrix.edt.mcp.server_1.27.0', 'plugin.xml'));
+    assert.equal(hasMcpBundle(home, { platform: 'win32', eclipseRoots: [] }), true, 'бандл в установке');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writePrefs: plain text, HTTP и включение get_form_screenshot', () => {
+  const dir = tempDir();
+  try {
+    const buildDir = join(dir, 'build');
+    writePrefs(buildDir, 24589);
+    let text = readFileSync(prefsPath(buildDir), 'utf8');
+    assert.match(text, /mcpServerHttpEnabled=true/);
+    assert.match(text, /mcpPlainTextMode=true/);
+    assert.match(text, /mcpDisabledTools=git,ask_workmate\n/, 'get_form_screenshot включён');
+
+    writeFileSync(
+      prefsPath(buildDir),
+      'eclipse.preferences.version=1\nmcpDisabledTools=git,ask_workmate,get_form_screenshot,custom\nmcpToolPrefsMigration=22\n',
+      'utf8',
+    );
+    writePrefs(buildDir, 24590);
+    text = readFileSync(prefsPath(buildDir), 'utf8');
+    assert.match(text, /mcpDisabledTools=git,ask_workmate,custom\n/, 'чужие инструменты сохранены');
+    assert.match(text, /mcpToolPrefsMigration=22\n/);
+
+    writePrefs(buildDir, 24591, { plainText: false, formScreenshots: false });
+    text = readFileSync(prefsPath(buildDir), 'utf8');
+    assert.match(text, /mcpPlainTextMode=false/);
+    assert.match(text, /mcpDisabledTools=git,ask_workmate,custom\n/, 'при выключенных скриншотах список не трогаем');
+
+    const args = guiArgs({ wsDir: 'ws', xmx: '6g', nativeFormBufferedLayoutRender: true });
+    assert.deepEqual(args.slice(-3), ['-vmargs', '-Xmx6g', '-DnativeFormBufferedLayoutRender=true']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('parseImportProgress: счётчик и текущий проект, ограничение total', () => {
+  const text = [
+    '!MESSAGE Project context is being started: cf (EXISTING_DATA_IMPORT)',
+    '!MESSAGE Project context is started: cf',
+    '!MESSAGE Project context is being started: epf_One (EXISTING_DATA_IMPORT)',
+    '!MESSAGE Project context is started: epf_One',
+    '!MESSAGE Project context is being started: epf_Two (EXISTING_DATA_IMPORT)',
+  ].join('\n');
+  const progress = parseImportProgress(text, 19);
+  assert.equal(progress.startedCount, 2);
+  assert.equal(progress.total, 19);
+  assert.equal(progress.current, 'epf_Two');
+  assert.deepEqual(progress.started, ['cf', 'epf_One']);
+  assert.equal(parseImportProgress(text, 1).startedCount, 1, 'не больше total');
+});
+
+test('readFromOffset и importDigest читают только новые строки metadata-лога', () => {
+  const dir = tempDir();
+  try {
+    const buildDir = join(dir, 'build');
+    const log = join(buildDir, 'ws', '.metadata', '.log');
+    touch(log, 'old line\n');
+    const first = readFromOffset(log, 0);
+    assert.match(first.text, /old line/);
+    assert.equal(first.offset, statSync(log).size);
+
+    writeFileSync(log, `${readFileSync(log, 'utf8')}!MESSAGE Project context is started: cf\n`, 'utf8');
+    const digest = importDigest(buildDir, first.offset, 19);
+    assert.equal(digest.startedCount, 1);
+    assert.equal(digest.current, 'cf');
+    assert.ok(digest.lines.some((line) => line.includes('Project context is started')));
+    assert.equal(readFromOffset(log, digest.offset).text, '');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('importMemoryWarning: предупреждает при ≥85 % и CPU overload', () => {
+  assert.deepEqual(importMemoryWarning('лимит не достигнут'), undefined);
+  const warning = importMemoryWarning('CPU overload. Memory 7195 MB used of 8192 MB');
+  assert.equal(warning.used, 7195);
+  assert.equal(warning.total, 8192);
+  assert.ok(warning.ratio > 0.85);
+  assert.equal(importMemoryWarning('Memory 100 MB used of 8192 MB'), undefined);
+  assert.equal(importMemoryWarning('CPU overload without numbers').cpuOverload, true);
 });
 
 test('файлы состояния лежат в build и переживают повторное чтение', () => {

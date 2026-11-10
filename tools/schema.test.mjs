@@ -230,6 +230,58 @@ test('v8std: адрес переопределяется ключом схемы
   assert.ok(bad.errors.some((line) => line.includes('servers.v8std.url')));
 });
 
+test('workspace: plainText/formScreenshots и ключи серверов из cordis.patch.yml', () => {
+  assert.equal(DEFAULTS.workspace.plainText, true);
+  assert.equal(DEFAULTS.workspace.formScreenshots, true);
+  for (const key of ['workspace.plainText', 'workspace.formScreenshots']) assert.equal(isKnownPath(key), true, key);
+  for (const key of [
+    'servers.edt.transport',
+    'servers.edt.reconnect.enabled',
+    'servers.edt.reconnect.initialDelayMs',
+    'servers.edt.reconnect.maxDelayMs',
+    'servers.edt.reconnect.maxAttempts',
+    'servers.tasks.unavailable',
+    'servers.tasks.transport',
+    'servers.v8std.transport',
+    'servers.bsl.command',
+    'servers.bsl.args',
+    'servers.bsl.env',
+    'servers.bsl.cwd',
+    'servers.bsl.maxInstructionBytes',
+  ]) {
+    assert.equal(isKnownPath(key), true, key);
+  }
+
+  // Конфиг, собранный из cordis.patch.yml, не должен давать предупреждений.
+  const patchLike = {
+    version: CONFIG_VERSION,
+    servers: {
+      edt: {
+        transport: 'streamable-http',
+        url: 'http://127.0.0.1:8765/mcp',
+        headers: {},
+        toolCallTimeoutMs: 900000,
+        failOnStartupError: false,
+        reconnect: { enabled: true, initialDelayMs: 1000, maxDelayMs: 30000, maxAttempts: 1000 },
+      },
+      tasks: { transport: 'streamable-http', unavailable: false },
+      v8std: { transport: 'streamable-http' },
+    },
+  };
+  const validation = validateConfig(patchLike);
+  assert.deepEqual(validation.errors, []);
+  assert.deepEqual(validation.warnings, []);
+
+  const badArgs = validateConfig({ version: CONFIG_VERSION, servers: { bsl: { args: 'jar' } } });
+  assert.ok(badArgs.errors.some((line) => line.includes('args')));
+  const badArgItem = validateConfig({ version: CONFIG_VERSION, servers: { bsl: { args: [1] } } });
+  assert.ok(badArgItem.errors.some((line) => line.includes('servers.bsl.args')));
+
+  const plan = planUpgrade({ version: 3 });
+  assert.ok(plan.added.includes('workspace.plainText'));
+  assert.ok(plan.added.includes('workspace.formScreenshots'));
+});
+
 test('sonar и gitlab: ключи в схеме, дефолты выключены, upgrade их добавляет', () => {
   assert.deepEqual(DEFAULTS.sonar, { enabled: false, projectKey: '' });
   assert.deepEqual(DEFAULTS.gitlab, { enabled: false });

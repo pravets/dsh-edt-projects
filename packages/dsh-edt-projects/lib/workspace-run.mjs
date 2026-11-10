@@ -14,12 +14,13 @@
 // Все зависимости, которые трогают процессы и время, передаются через `deps` —
 // так сценарии проверяются без запуска настоящего EDT.
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
+  appendImportDigest,
   buildWorkspaceSnapshot,
   clearProgress,
   detectEdtHome,
@@ -28,6 +29,8 @@ import {
   formatElapsed,
   guiArgs,
   importArgs,
+  importDigest,
+  importMemoryWarning,
   importScriptText,
   isPortFree,
   killTree,
@@ -40,6 +43,7 @@ import {
   readPort,
   readWorkspaceSnapshot,
   registeredProjectsDir,
+  requiredJava,
   resolveEdtVm,
   stateOf,
   tailFile,
@@ -134,25 +138,70 @@ function lockInfo(file) {
   }
 }
 
-/** Захватывает lock; чужой живой lock — сигнал «уже идёт». */
+/** Сколько живёт lock без обновления, если владелец не отвечает. */
+const LOCK_MAX_AGE_MS = 6 * 60 * 60_000;
+
+/** Состояние lock для диагностики: живой ли pid, возраст, просрочен ли. */
+export function lockState(file, deps = {}) {
+  const info = lockInfo(file);
+  if (info === null) return { exists: false };
+  const pid = Number.parseInt(info.pid, 10);
+  const at = Date.parse(info.at ?? '');
+  const ageMs = Number.isNaN(at) ? undefined : Math.max(0, Date.now() - at);
+  const maxAgeMs = deps.maxAgeMs ?? LOCK_MAX_AGE_MS;
+  const alive = deps.alive ?? ((value) => pidAlive(value));
+  const live = Number.isInteger(pid) && pid > 0 && alive(pid);
+  return {
+    exists: true,
+    pid: Number.isInteger(pid) ? pid : undefined,
+    at: Number.isNaN(at) ? undefined : new Date(at).toISOString(),
+    ageMs,
+    stale: !live || (ageMs !== undefined && ageMs > maxAgeMs),
+  };
+}
+
+/**
+ * Захватывает lock. Чужой lock считается stale, если pid не жив, образ не
+ * совпадает (`image`) или возраст больше `maxAgeMs`; stale перехватывается.
+ */
 export function acquireLock(file, deps = {}) {
   mkdirSync(path.dirname(file), { recursive: true });
   const alive = deps.alive ?? ((pid) => pidAlive(pid));
-  const existing = lockInfo(file);
-  if (existing?.pid !== undefined) {
-    if (alive(existing.pid)) return false;
+  const image = deps.image;
+  const maxAgeMs = deps.maxAgeMs ?? LOCK_MAX_AGE_MS;
+  const now = deps.now?.() ?? new Date();
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const existing = lockInfo(file);
+    if (existing !== null) {
+      const pid = Number.parseInt(existing.pid, 10);
+      const at = Date.parse(existing.at ?? '');
+      const tooOld = !Number.isNaN(at) && now.getTime() - at > maxAgeMs;
+      const live = Number.isInteger(pid) && pid > 0 && alive(pid);
+      const sameImage = live && (image === undefined || pidAlive(pid, [image]));
+      if (live && sameImage && !tooOld) return false;
+      try {
+        unlinkSync(file);
+      } catch {
+        // lock мог исчезнуть между чтением и удалением
+      }
+    }
     try {
-      unlinkSync(file);
+      writeFileSync(
+        file,
+        JSON.stringify({
+          pid: process.pid,
+          at: now.toISOString(),
+          image: path.basename(process.execPath),
+        }),
+        { flag: 'wx' },
+      );
+      return true;
     } catch {
-      // lock мог уже исчезнуть
+      // кто-то успел создать lock — повторим проверку
     }
   }
-  try {
-    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: 'wx' });
-    return true;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 export function releaseLock(file) {
@@ -233,25 +282,54 @@ export async function cmdInit(root, args = {}, deps = {}) {
   mkdirSync(buildDir, { recursive: true });
   writeWorkspaceSnapshot(buildDir, snapshot);
 
-  const state = stateOf(buildDir, { alive: deps.alive });
-  if (state.label === 'ready' || state.label === 'starting') {
-    logTo(buildDir, `init: окружение уже ${state.label === 'ready' ? 'готово' : 'поднимается'}, делать нечего`);
-    return 0;
-  }
-
   const lock = filePath(buildDir, 'lock');
   if (!acquireLock(lock, deps)) {
     logTo(buildDir, 'init: другой процесс уже занимает порт, выходим');
     return 0;
   }
   try {
+    // Осиротевший run-lock не должен блокировать повторный init.
+    const runLock = filePath(buildDir, 'runLock');
+    const maxAgeMs = (Math.max(snapshot.settings.startTimeout, snapshot.settings.importTimeout) + 600) * 1000;
+    const running = lockState(runLock, { ...deps, maxAgeMs });
+    if (running.exists && running.stale !== true) {
+      logTo(buildDir, `init: run уже идёт (pid ${running.pid ?? '?'}, возраст ${running.ageMs === undefined ? '?' : formatElapsed(new Date(Date.now() - running.ageMs).toISOString())})`);
+      return 4;
+    }
+    if (running.exists) {
+      try {
+        unlinkSync(runLock);
+      } catch {
+        // lock уже исчез
+      }
+      logTo(buildDir, 'init: снят осиротевший run-lock');
+    }
+
+    const state = stateOf(buildDir, { alive: deps.alive });
+    if (state.label === 'ready') {
+      logTo(buildDir, 'init: окружение уже готово, делать нечего');
+      return 0;
+    }
+    const alive = deps.alive ?? ((pid) => pidAlive(pid, ['1cedt']));
+    if (state.label === 'starting' && state.pid !== null && alive(state.pid.pid)) {
+      logTo(buildDir, 'init: окружение уже поднимается, делать нечего');
+      return 0;
+    }
+    if (state.label === 'starting') {
+      // Осталась только запись прогресса от упавшего run: начинаем заново.
+      clearProgress(buildDir);
+    }
+
     let port = readPort(buildDir);
     const free = deps.isPortFree ?? isPortFree;
     if (port === null || !(await free(port))) {
       port = await (deps.pickFreePort ?? pickFreePort)(snapshot.settings.ports, { isFree: free });
       writePort(buildDir, port);
     }
-    const prefs = writePrefs(buildDir, port);
+    const prefs = writePrefs(buildDir, port, {
+      plainText: snapshot.settings.plainText,
+      formScreenshots: snapshot.settings.formScreenshots,
+    });
     logTo(buildDir, `init: порт ${port}, prefs ${path.relative(root, prefs)}, запускаю run в фоне`);
     const logPath = path.join(buildDir, 'logs', 'init.log');
     (deps.spawnDetached ?? spawnDetached)(process.execPath, [SELF, 'run', '--root', root], logPath, root, deps);
@@ -277,9 +355,11 @@ export async function cmdRun(root, args = {}, deps = {}) {
   mkdirSync(path.join(buildDir, 'logs'), { recursive: true });
 
   const lock = filePath(buildDir, 'runLock');
-  if (!acquireLock(lock, deps)) {
-    log('run: другой запуск уже идёт, выходим');
-    return 0;
+  const maxAgeMs = (Math.max(settings.startTimeout, settings.importTimeout) + 600) * 1000;
+  if (!acquireLock(lock, { ...deps, maxAgeMs, image: path.basename(process.execPath) })) {
+    const holder = lockState(lock, { ...deps, maxAgeMs });
+    log(`run: другой запуск уже идёт (pid ${holder.pid ?? '?'}, возраст ${holder.ageMs === undefined ? '?' : `${Math.round(holder.ageMs / 1000)}s`}), выходим`);
+    return 2;
   }
 
   try {
@@ -297,7 +377,11 @@ export async function cmdRun(root, args = {}, deps = {}) {
       return 1;
     }
     if (detected.mcpBundle !== true) {
-      log('edt: предупреждение — в установке не найден бандл EDT-MCP (проверьте plugins/features)');
+      // Это только файловая эвристика: бандл может стоять в пользовательской
+      // configuration area, а готовность подтверждает /health.
+      log('edt: EDT-MCP не подтверждён по файлам; готовность проверит /health');
+    } else if (Array.isArray(detected.mcpEvidence) && detected.mcpEvidence.length > 0) {
+      log(`edt: EDT-MCP найден: ${detected.mcpEvidence[0]}`);
     }
 
     const port = readPort(buildDir);
@@ -315,14 +399,32 @@ export async function cmdRun(root, args = {}, deps = {}) {
       log('edt: FAILED: в установке нет 1cedtcli, импорт проектов невозможен');
       return 1;
     }
+
+    let importWarning;
+    let lastImportDetail;
     if (importNeeded) {
+      const metadataLog = path.join(snapshot.wsDir, '.metadata', '.log');
+      let offset = 0;
+      try {
+        offset = statSync(metadataLog).size;
+      } catch {
+        offset = 0;
+      }
+      const total = snapshot.projects.length;
       const scriptPath = writeImportScript(buildDir, snapshot.projects);
-      writeProgress(buildDir, 'edt', 'importing', tailFile(path.join(buildDir, 'logs', 'edt-import.log')));
-      log(`edt: импорт ${snapshot.projects.length} проект(ов) в ${path.relative(root, snapshot.wsDir)} (xmx ${settings.xmxImport}, timeout ${settings.importTimeout}s)`);
-      const ticker = setInterval(() => {
-        const detail = tailFile(path.join(buildDir, 'logs', 'edt-import.log'));
-        if (detail) writeProgress(buildDir, 'edt', 'importing', detail);
-      }, 10_000);
+      const tick = () => {
+        const digest = (deps.importDigest ?? importDigest)(buildDir, offset, total, deps);
+        offset = digest.offset;
+        (deps.appendImportDigest ?? appendImportDigest)(buildDir, digest.lines);
+        const memory = importMemoryWarning(digest.text);
+        if (memory !== undefined) importWarning = memory;
+        lastImportDetail = `${digest.startedCount}/${total}${digest.current === undefined ? '' : ` — ${digest.current}`}`;
+        writeProgress(buildDir, 'edt', 'importing', lastImportDetail, deps.now?.(), memory === undefined ? undefined : { warning: memory });
+      };
+      lastImportDetail = `0/${total}`;
+      writeProgress(buildDir, 'edt', 'importing', lastImportDetail, deps.now?.());
+      log(`edt: импорт ${total} проект(ов) в ${path.relative(root, snapshot.wsDir)} (xmx ${settings.xmxImport}, timeout ${settings.importTimeout}s)`);
+      const ticker = setInterval(tick, deps.importPollMs ?? 5000);
       ticker.unref?.();
       try {
         await (deps.runCapture ?? runCapture)(
@@ -333,15 +435,20 @@ export async function cmdRun(root, args = {}, deps = {}) {
         );
       } catch (error) {
         clearInterval(ticker);
-        const tail = tailFile(path.join(buildDir, 'logs', 'edt-import.log'));
-        writeProgress(buildDir, 'edt', 'import-failed', `${tail ?? error?.message ?? error}; см. build/logs/edt-import.log`);
+        tick();
+        const detail = `импорт не удался (${lastImportDetail}): ${error?.message ?? error}; см. build/ws/.metadata/.log`;
+        writeProgress(buildDir, 'edt', 'import-failed', detail, deps.now?.(), importWarning === undefined ? undefined : { warning: importWarning });
         writeStamp(buildDir, 'failed', deps.now?.());
-        log(`edt: FAILED: импорт не удался — ${error?.message ?? error}; лог build/logs/edt-import.log`);
+        log(`edt: FAILED: ${detail}`);
         return 1;
       }
       clearInterval(ticker);
+      tick();
       writeImported(buildDir, snapshot.projects, deps.now?.());
-      log('edt: импорт завершён');
+      log(`edt: импорт завершён (${lastImportDetail})`);
+      if (importWarning !== undefined) {
+        log(`edt: импорт шёл на пределе памяти (${importWarning.used ?? '?'}/${importWarning.total ?? '?'} MB) — поднимите workspace.xmxImport`);
+      }
       if (snapshot.forceImport === true) {
         const { forceImport, ...rest } = snapshot;
         writeWorkspaceSnapshot(buildDir, rest);
@@ -350,16 +457,26 @@ export async function cmdRun(root, args = {}, deps = {}) {
       log('edt: импорт не требуется');
     }
 
-    writePrefs(buildDir, port);
+    writePrefs(buildDir, port, {
+      plainText: settings.plainText,
+      formScreenshots: settings.formScreenshots,
+    });
     const runningPid = readPid(buildDir)?.pid;
     if (runningPid !== undefined && (deps.alive ?? ((pid) => pidAlive(pid, ['1cedt'])))(runningPid)) {
       log(`edt: уже запущен (pid ${runningPid})`);
     } else {
       const vm = (deps.resolveEdtVm ?? resolveEdtVm)(settings, detected.home, deps);
+      const required = (deps.requiredJava ?? requiredJava)(detected.home, { platform: process.platform });
+      log(`edt: Java ${vm ?? 'авто'}${required.major === undefined ? '' : ` (EDT требует ${required.major})`}`);
       writeProgress(buildDir, 'edt', 'gui');
       const gui = (deps.spawnDetached ?? spawnDetached)(
         detected.bin,
-        guiArgs({ wsDir: snapshot.wsDir, xmx: settings.xmxIde, vm }),
+        guiArgs({
+          wsDir: snapshot.wsDir,
+          xmx: settings.xmxIde,
+          vm,
+          nativeFormBufferedLayoutRender: settings.formScreenshots,
+        }),
         path.join(buildDir, 'logs', 'edt.log'),
         root,
         deps,
@@ -377,17 +494,30 @@ export async function cmdRun(root, args = {}, deps = {}) {
     removeStamp(buildDir, 'ready');
     writeProgress(buildDir, 'edt', 'health');
     log(`edt: жду /health на порту ${port} (до ${Math.round(settings.startTimeout / 60)} мин)`);
-    const ready = await (deps.waitHealth ?? waitHealth)(port, settings.startTimeout * 1000, deps);
-    if (ready) {
-      writeProgress(buildDir, 'edt', 'ready');
+    const ready = await (deps.waitReady ?? waitReady)(
+      {
+        port,
+        pid: readPid(buildDir)?.pid,
+        alive: (value) => (deps.alive ?? ((pid) => pidAlive(pid, ['1cedt'])))(value),
+        logPath: path.join(buildDir, 'logs', 'edt.log'),
+        timeoutMs: settings.startTimeout * 1000,
+      },
+      deps,
+    );
+    if (ready.ok === true) {
+      writeProgress(buildDir, 'edt', 'ready', undefined, deps.now?.(), importWarning === undefined ? undefined : { warning: importWarning });
       writeStamp(buildDir, 'ready', deps.now?.());
       removeStamp(buildDir, 'failed');
       log('edt: READY');
       return 0;
     }
-    writeProgress(buildDir, 'edt', 'failed', 'health timeout');
+    const detail =
+      ready.reason === 'process-exited'
+        ? `процесс EDT завершился${ready.detail === undefined ? '' : `: ${ready.detail}`}`
+        : `health timeout${ready.detail === undefined ? '' : `: ${ready.detail}`}`;
+    writeProgress(buildDir, 'edt', 'failed', detail, deps.now?.(), importWarning === undefined ? undefined : { warning: importWarning });
     writeStamp(buildDir, 'failed', deps.now?.());
-    log('edt: FAILED: health timeout');
+    log(`edt: FAILED: ${detail}`);
     return 1;
   } finally {
     releaseLock(lock);
@@ -411,6 +541,33 @@ export async function waitHealth(port, timeoutMs, deps = {}) {
     await delay(pollMs);
   }
   return false;
+}
+
+/**
+ * Ждёт готовности EDT и замечает смерть процесса: если pid умер, а /health
+ * молчит grace-период, возвращает причину сразу, не выжидая весь startTimeout.
+ * @returns {Promise<{ ok: boolean, reason?: 'process-exited'|'timeout', detail?: string }>}
+ */
+export async function waitReady({ port, pid, alive, logPath, timeoutMs }, deps = {}) {
+  const probe = deps.probeHealth ?? probeHealth;
+  const delay = deps.sleep ?? sleep;
+  const pollMs = deps.pollMs ?? HEALTH_POLL_MS;
+  const graceMs = deps.processGraceMs ?? 15_000;
+  const deadline = Date.now() + timeoutMs;
+  let deadSince;
+  const detail = () => (typeof logPath === 'string' ? tailFile(logPath, 300) ?? undefined : undefined);
+
+  while (Date.now() < deadline) {
+    if (await probe(port, deps)) return { ok: true };
+    if (pid !== undefined && typeof alive === 'function' && !alive(pid)) {
+      deadSince ??= Date.now();
+      if (Date.now() - deadSince >= graceMs) return { ok: false, reason: 'process-exited', detail: detail() };
+    } else {
+      deadSince = undefined;
+    }
+    await delay(pollMs);
+  }
+  return { ok: false, reason: 'timeout', detail: detail() };
 }
 
 /** Останавливает EDT этого worktree. */
@@ -471,6 +628,13 @@ export function statusReport(root, deps = {}) {
     `workspace: ${snapshot?.wsDir ?? path.join(buildDir, 'ws')}`,
     `порт: ${state.port ?? '-'}  pid: ${state.pid?.pid ?? '-'}`,
   ];
+  const settings = snapshot?.settings ?? normalizeWorkspaceSettings({});
+  const home = detectEdtHome(settings, { platform: process.platform, env: process.env });
+  const required = requiredJava(home.home, { platform: process.platform });
+  const vm = resolveEdtVm(settings, home.home, { platform: process.platform, env: process.env });
+  lines.push(`EDT: ${home.home ?? 'не найден'}`);
+  lines.push(`Java: ${vm ?? 'авто'}${required.major === undefined ? '' : ` (EDT требует ${required.major})`}`);
+  lines.push(`Plain text: ${settings.plainText === false ? 'нет' : 'да'}; скриншоты форм: ${settings.formScreenshots === false ? 'нет' : 'да'}`);
   if (progress?.phase) {
     lines.push(`фаза: ${progress.phase}${progress.since ? ` (${formatElapsed(progress.since)})` : ''}${progress.detail ? ` — ${progress.detail}` : ''}`);
   }

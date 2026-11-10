@@ -10,17 +10,22 @@
 // поднятое opencode в том же worktree, плагин принимает как готовое.
 import { execFileSync } from 'node:child_process';
 import {
+  appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   readlinkSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer, connect } from 'node:net';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { DEFAULTS } from './schema.mjs';
@@ -115,6 +120,8 @@ export function normalizeWorkspaceSettings(raw = {}, env = process.env) {
     projects: Array.isArray(value.projects) ? value.projects.filter((item) => text(item) !== undefined).map((item) => item.trim()) : [],
     ports: min <= max ? { min, max } : { min: Math.min(min, max), max: Math.max(min, max) },
     stopOnSessionEnd: pick('stopOnSessionEnd', defaults.stopOnSessionEnd) !== false,
+    plainText: pick('plainText', defaults.plainText) !== false,
+    formScreenshots: pick('formScreenshots', defaults.formScreenshots) !== false,
   };
 }
 
@@ -318,12 +325,46 @@ export function mergePrefsText(current, values = {}) {
   return out;
 }
 
+/** Значения инструментов, отключённых в EDT-MCP по умолчанию. */
+export const DEFAULT_DISABLED_TOOLS = ['git', 'ask_workmate', 'get_form_screenshot'];
+
+/** Значение ключа prefs (первое вхождение). */
+export function prefValue(text, key) {
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const index = line.indexOf('=');
+    if (index > 0 && line.slice(0, index) === key) return line.slice(index + 1);
+  }
+  return undefined;
+}
+
+/** Список отключённых инструментов: без tool, если он нужен. */
+function disabledToolsWithout(current, tool) {
+  const raw = prefValue(current, 'mcpDisabledTools');
+  const list = (raw === undefined ? DEFAULT_DISABLED_TOOLS : raw.split(','))
+    .map((item) => item.trim())
+    .filter((item) => item !== '' && item !== tool);
+  return [...new Set(list)].join(',');
+}
+
 /** prefs, включающие MCP-сервер EDT на нужном порту при старте. */
-export function writePrefs(buildDir, port) {
+export function writePrefs(buildDir, port, options = {}) {
   const file = prefsPath(buildDir);
   mkdirSync(path.dirname(file), { recursive: true });
   const current = existsSync(file) ? readFileSync(file, 'utf8') : '';
-  const next = mergePrefsText(current, { mcpServerAutoStart: 'true', mcpServerPort: port });
+  const values = {
+    mcpServerHttpEnabled: 'true',
+    mcpServerAutoStart: 'true',
+    mcpServerPort: port,
+    // DSH не рендерит embedded resource: markdown-инструменты EDT-MCP должны
+    // отдавать текст (Plain text mode).
+    mcpPlainTextMode: String(options.plainText !== false),
+  };
+  if (options.formScreenshots !== false) {
+    // get_form_screenshot выключен в EDT-MCP по умолчанию; включаем его, не
+    // трогая остальные отключённые инструменты.
+    values.mcpDisabledTools = disabledToolsWithout(current, 'get_form_screenshot');
+  }
+  const next = mergePrefsText(current, values);
   atomicWrite(file, next);
   return file;
 }
@@ -476,12 +517,13 @@ export function readProgress(buildDir) {
  * @param now момент записи (для тестов передаётся явно: `since` не должен
  *   зависеть от разрешения часов).
  */
-export function writeProgress(buildDir, kind, phase, detail, now = new Date()) {
+export function writeProgress(buildDir, kind, phase, detail, now = new Date(), extra = undefined) {
   const prev = readProgress(buildDir) ?? { startedAt: now.toISOString() };
   const stamp = now.toISOString();
   const was = prev[kind];
   prev[kind] = { phase, since: was?.phase === phase && was.since ? was.since : stamp, updated: stamp };
   if (detail !== undefined) prev[kind].detail = detail;
+  if (extra !== undefined && typeof extra === 'object') Object.assign(prev[kind], extra);
   atomicWrite(filePath(buildDir, 'progress'), `${JSON.stringify(prev, null, 2)}\n`);
 }
 
@@ -501,6 +543,86 @@ export function tailFile(file, maxLen = 200) {
   if (content === undefined) return null;
   const lines = content.split(/\r?\n/).filter((line) => line.trim() !== '');
   return lines.length === 0 ? null : lines[lines.length - 1].slice(0, maxLen);
+}
+
+/** Читает файл с байтового смещения (для растущего workspace `.metadata/.log`). */
+export function readFromOffset(file, offset, { maxBytes = 512 * 1024 } = {}) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const size = statSync(file).size;
+    const start = Math.max(0, Math.min(offset ?? 0, size));
+    const length = Math.min(Math.max(0, size - start), maxBytes);
+    if (length === 0) return { text: '', offset: size };
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, start);
+    return { text: buffer.toString('utf8'), offset: size };
+  } catch {
+    return { text: '', offset: offset ?? 0 };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+const PROJECT_STARTED = /Project context is started:\s*(.+?)\s*$/;
+const PROJECT_STARTING = /Project context is being started:\s*(.+?)(?:\s+\([A-Z_]+\))?\s*$/;
+
+/**
+ * Прогресс импорта по `build/ws/.metadata/.log`: сколько проектов стартовало
+ * и какой проект сейчас в работе. Счётчик ограничен `total`.
+ */
+export function parseImportProgress(text, total = 0) {
+  const started = new Set();
+  let lastStarted;
+  let lastStarting;
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const startedMatch = PROJECT_STARTED.exec(line);
+    if (startedMatch !== null) {
+      lastStarted = startedMatch[1].trim();
+      started.add(lastStarted);
+      continue;
+    }
+    const startingMatch = PROJECT_STARTING.exec(line);
+    if (startingMatch !== null) lastStarting = startingMatch[1].trim();
+  }
+  const count = total > 0 ? Math.min(started.size, total) : started.size;
+  const current = lastStarting !== undefined && !started.has(lastStarting) ? lastStarting : lastStarted;
+  return { started: [...started], startedCount: count, total, current };
+}
+
+/** Свежий кусок metadata-лога, прогресс импорта и полезные строки. */
+export function importDigest(buildDir, offset, total, deps = {}) {
+  const file = path.join(buildDir, 'ws', '.metadata', '.log');
+  const { text, offset: next } = (deps.readFromOffset ?? readFromOffset)(file, offset);
+  const progress = parseImportProgress(text, total);
+  const lines = text
+    .split(/\r?\n/)
+    .filter((line) => /Project context|CPU overload|Memory \d+ MB|!ERROR|Exception/.test(line));
+  return { ...progress, offset: next, lines, text };
+}
+
+/** Копирует значимые строки импорта в build/logs/edt-import.log. */
+export function appendImportDigest(buildDir, lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return;
+  const file = path.join(buildDir, 'logs', 'edt-import.log');
+  mkdirSync(path.dirname(file), { recursive: true });
+  appendFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+}
+
+/**
+ * Признак нехватки памяти при импорте: `CPU overload. Memory X MB used of Y MB`
+ * или явный `CPU overload`. Возвращает последнее измерение, если загрузка ≥85 %.
+ */
+export function importMemoryWarning(text) {
+  const matches = [...String(text ?? '').matchAll(/Memory\s+(\d+)\s+MB\s+used\s+of\s+(\d+)\s+MB/gi)];
+  const last = matches.at(-1);
+  const cpuOverload = /CPU overload/i.test(String(text ?? ''));
+  if (last === undefined) return cpuOverload ? { cpuOverload: true } : undefined;
+  const used = Number.parseInt(last[1], 10);
+  const total = Number.parseInt(last[2], 10);
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return undefined;
+  const ratio = used / total;
+  return ratio >= 0.85 || cpuOverload ? { used, total, ratio, cpuOverload } : undefined;
 }
 
 /** Снимок настроек окружения — для диагностики и фонового процесса. */
@@ -602,18 +724,97 @@ export function killTree(pid, { force = false, platform = process.platform, run 
 
 // --- установка EDT ----------------------------------------------------------
 
-/** Установлен ли в этой EDT плагин EDT-MCP (эвристика по именам бандлов). */
-export function hasMcpBundle(home) {
-  for (const dir of ['plugins', 'features']) {
+const MCP_BUNDLE = /com\.ditrix\.edt\.mcp\.server|ditrix/i;
+
+function bundleNames(dir) {
+  try {
+    return readdirSync(dir).filter((name) => MCP_BUNDLE.test(name));
+  } catch {
+    return [];
+  }
+}
+
+/** Значение ключа Eclipse `config.ini` (без разбора секций). */
+function iniValue(text, key) {
+  const match = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*=\\s*(.+)$`, 'm').exec(String(text ?? ''));
+  return match === null ? undefined : match[1].trim();
+}
+
+/** `file\:configuration/` -> абсолютный путь. */
+function resolveEclipsePath(value, baseDir) {
+  if (typeof value !== 'string' || value === '') return undefined;
+  const raw = value.replace(/\\:/g, ':').replace(/^file:/i, '');
+  if (raw === '') return undefined;
+  return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(baseDir, raw);
+}
+
+/** Области конфигурации, в которых Eclipse ищет бандлы. */
+function configurationAreas(home, { platform = process.platform, eclipseRoots } = {}) {
+  const areas = [];
+  if (typeof home === 'string' && home !== '') {
+    // Сам каталог установки: <home>/plugins и <home>/features.
+    areas.push(home);
+    const configDir = path.join(home, 'configuration');
+    areas.push(configDir);
+    try {
+      const shared = iniValue(readFileSync(path.join(configDir, 'config.ini'), 'utf8'), 'osgi.sharedConfiguration.area');
+      const resolved = resolveEclipsePath(shared, configDir);
+      if (resolved !== undefined && resolved !== configDir) areas.push(resolved);
+    } catch {
+      // config.ini может отсутствовать — не мешает проверке установки
+    }
+    try {
+      const ini = readFileSync(path.join(home, platform === 'win32' ? '1cedt.ini' : '1cedt.ini'), 'utf8');
+      const line = /^-configuration\s+(.+)$/m.exec(ini)?.[1]?.trim();
+      const resolved = resolveEclipsePath(line, home);
+      if (resolved !== undefined) areas.push(resolved);
+    } catch {
+      // 1cedt.ini может отсутствовать
+    }
+  }
+
+  const homeDir = platform === 'win32' ? homedir() : (process.env.HOME ?? homedir());
+  for (const root of eclipseRoots ?? [path.join(homeDir, '.eclipse')]) {
     let entries;
     try {
-      entries = readdirSync(path.join(home, dir));
+      entries = readdirSync(root, { withFileTypes: true });
     } catch {
       continue;
     }
-    if (entries.some((name) => /mcp/i.test(name) || /ditrix/i.test(name))) return true;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^org\.eclipse\.platform_/.test(entry.name)) continue;
+      areas.push(path.join(root, entry.name, 'configuration'));
+    }
   }
-  return false;
+  return [...new Set(areas)];
+}
+
+/**
+ * Где реально лежит EDT-MCP: установка, shared area или пользовательская
+ * configuration area (`~/.eclipse/org.eclipse.platform_*`). Это подсказка для
+ * диагностики, а не критерий выбора установки.
+ * @returns {{ found: boolean, evidence: string[] }}
+ */
+export function mcpEvidence(home, options = {}) {
+  const evidence = [];
+  for (const area of configurationAreas(home, options)) {
+    for (const sub of ['plugins', 'features']) {
+      const hits = bundleNames(path.join(area, sub));
+      if (hits.length > 0) evidence.push(`${path.join(area, sub)}: ${hits[0]}`);
+    }
+    const bundles = path.join(area, 'org.eclipse.equinox.simpleconfigurator', 'bundles.info');
+    try {
+      if (MCP_BUNDLE.test(readFileSync(bundles, 'utf8'))) evidence.push(bundles);
+    } catch {
+      // bundles.info может отсутствовать
+    }
+  }
+  return { found: evidence.length > 0, evidence };
+}
+
+/** Установлен ли в этой EDT плагин EDT-MCP (обёртка над mcpEvidence). */
+export function hasMcpBundle(home, options = {}) {
+  return mcpEvidence(home, options).found;
 }
 
 const VERSION_PATTERN = /^1c-edt-(\d{4})\.(\d+)\.(\d+)\+(\d+)-/;
@@ -635,9 +836,13 @@ const compareVersion = (left, right) => {
 
 /**
  * Установка EDT: явная из настроек/`DSH_1C_EDT_HOME` либо старшая найденная.
- * @returns {{ home?: string, bin?: string, cli?: string, mcpBundle?: boolean, source?: string, error?: string }}
+ * Наличие EDT-MCP в файлах — только диагностическая подсказка: бандл может
+ * стоять в пользовательской configuration area, а окончательно готовность
+ * подтверждает `/health`.
+ * @returns {{ home?: string, bin?: string, cli?: string, mcpBundle?: boolean,
+ *             mcpEvidence?: string[], source?: string, error?: string }}
  */
-export function detectEdtHome(settings, { platform = process.platform, env = process.env, roots } = {}) {
+export function detectEdtHome(settings, { platform = process.platform, env = process.env, roots, eclipseRoots } = {}) {
   const binary = platform === 'win32' ? '1cedt.exe' : '1cedt';
   const cli = platform === 'win32' ? '1cedtcli.exe' : '1cedtcli';
   const explicit = text(env?.DSH_1C_EDT_HOME) ?? text(settings?.home?.[platform]);
@@ -646,11 +851,13 @@ export function detectEdtHome(settings, { platform = process.platform, env = pro
     const bin = path.join(home, binary);
     if (!existsSync(bin)) return { error: `в ${home} нет ${binary}`, home };
     const cliPath = path.join(home, cli);
+    const evidence = mcpEvidence(home, { platform, env, eclipseRoots });
     return {
       home,
       bin,
       cli: existsSync(cliPath) ? cliPath : undefined,
-      mcpBundle: hasMcpBundle(home),
+      mcpBundle: evidence.found,
+      mcpEvidence: evidence.evidence,
       source: text(env?.DSH_1C_EDT_HOME) ? 'env' : 'config',
     };
   }
@@ -670,48 +877,111 @@ export function detectEdtHome(settings, { platform = process.platform, env = pro
       if (version === null) continue;
       const home = path.join(root, entry.name);
       if (!existsSync(path.join(home, binary))) continue;
-      candidates.push({ home, version, mcpBundle: hasMcpBundle(home) });
+      candidates.push({ home, version });
     }
   }
   if (candidates.length === 0) {
     return { error: `1C:EDT не найден; задайте workspace.home или DSH_1C_EDT_HOME (искали в ${searchRoots.join(', ')})` };
   }
+  // Выбор только по версии: наличие бандла не должно решать, какую установку
+  // запускать (бандл может лежать в пользовательской configuration area).
   candidates.sort((left, right) => compareVersion(right.version, left.version));
-  const chosen = candidates.find((candidate) => candidate.mcpBundle) ?? candidates[0];
+  const chosen = candidates[0];
   const cliPath = path.join(chosen.home, cli);
+  const evidence = mcpEvidence(chosen.home, { platform, env, eclipseRoots });
   return {
     home: chosen.home,
     bin: path.join(chosen.home, binary),
     cli: existsSync(cliPath) ? cliPath : undefined,
-    mcpBundle: chosen.mcpBundle,
+    mcpBundle: evidence.found,
+    mcpEvidence: evidence.evidence,
     source: 'autodetect',
   };
 }
 
-/** Java для EDT: явная настройка, env либо jdk-full-17 рядом с установкой. */
+/**
+ * Требования EDT к Java из `1cedt.ini`: major из
+ * `-Dosgi.requiredJavaVersion` и явный `-vm` (до `-vmargs`), если задан.
+ */
+export function requiredJava(home, { platform = process.platform } = {}) {
+  const result = { major: undefined, vm: undefined };
+  if (typeof home !== 'string' || home === '') return result;
+  let ini;
+  try {
+    ini = readFileSync(path.join(home, '1cedt.ini'), 'utf8');
+  } catch {
+    return result;
+  }
+  const major = /-Dosgi\.requiredJavaVersion=(\d+)/.exec(ini)?.[1];
+  if (major !== undefined) result.major = Number.parseInt(major, 10);
+
+  const lines = ini.split(/\r?\n/);
+  const vmargsAt = lines.findIndex((line) => line.trim() === '-vmargs');
+  const launchLines = vmargsAt === -1 ? lines : lines.slice(0, vmargsAt);
+  const vmAt = launchLines.findIndex((line) => line.trim() === '-vm');
+  let vm;
+  if (vmAt !== -1) {
+    vm = launchLines.slice(vmAt + 1).find((line) => line.trim() !== '')?.trim();
+  } else {
+    vm = /^\s*-vm\s+(.+)$/m.exec(launchLines.join('\n'))?.[1]?.trim();
+  }
+  if (vm !== undefined && vm !== '') {
+    result.vm = path.isAbsolute(vm) ? path.normalize(vm) : path.resolve(home, vm);
+  }
+  return result;
+}
+
+/** JDK рядом с установкой EDT: `{ major, path }`, по убыванию major. */
+function jdkCandidates(components, javaBinary) {
+  let entries;
+  try {
+    entries = readdirSync(components, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const major = /jdk-(?:full-)?(\d+)/i.exec(entry.name)?.[1];
+    if (major === undefined) continue;
+    const bin = path.join(components, entry.name, 'bin', javaBinary);
+    if (!existsSync(bin)) continue;
+    candidates.push({ major: Number.parseInt(major, 10), path: bin });
+  }
+  return candidates.sort((left, right) => right.major - left.major);
+}
+
+/**
+ * Java для EDT: явная настройка → `-vm` из ini → JDK рядом с установкой по
+ * требуемой major (точная, затем ближайшая старшая, затем старшая доступная).
+ */
 export function resolveEdtVm(settings, home, { platform = process.platform, env = process.env } = {}) {
   const explicit = text(env?.DSH_1C_EDT_VM) ?? text(settings?.vm);
   if (explicit !== undefined) return explicit;
   if (typeof home !== 'string' || home === '') return undefined;
+
+  const required = requiredJava(home, { platform });
+  if (required.vm !== undefined && existsSync(required.vm)) return required.vm;
+
   const javaBinary = platform === 'win32' ? 'javaw.exe' : 'java';
-  try {
-    const components = path.dirname(home);
-    const jdk = readdirSync(components, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && /jdk-full-17/.test(entry.name))
-      .map((entry) => path.join(components, entry.name, 'bin', javaBinary))
-      .filter((candidate) => existsSync(candidate))
-      .sort();
-    return jdk[0];
-  } catch {
-    return undefined;
-  }
+  const candidates = jdkCandidates(path.dirname(home), javaBinary);
+  if (candidates.length === 0) return undefined;
+  if (required.major === undefined) return candidates[0].path;
+
+  const exact = candidates.find((candidate) => candidate.major === required.major);
+  if (exact !== undefined) return exact.path;
+  const newer = [...candidates].reverse().find((candidate) => candidate.major >= required.major);
+  return (newer ?? candidates[0]).path;
 }
 
 /** Аргументы запуска EDT GUI с отдельным workspace. */
-export function guiArgs({ wsDir, xmx, vm }) {
+export function guiArgs({ wsDir, xmx, vm, nativeFormBufferedLayoutRender = false }) {
   const args = ['-nosplash', '-data', wsDir, '--launcher.appendVmargs'];
   if (typeof vm === 'string' && vm !== '') args.push('-vm', vm);
   args.push('-vmargs', `-Xmx${xmx}`);
+  // Требование EDT-MCP для get_form_screenshot: свойство должно идти после
+  // -vmargs. На Windows включает буферизованный рендер форм на всю сессию.
+  if (nativeFormBufferedLayoutRender) args.push('-DnativeFormBufferedLayoutRender=true');
   return args;
 }
 
