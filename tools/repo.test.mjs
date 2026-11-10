@@ -12,6 +12,7 @@ import {
   mainRootOf,
   repositoryAt,
   repositoriesUnder,
+  resolveContextCwd,
   uniqueRepositories,
 } from '../packages/dsh-edt-projects/lib/repo.mjs';
 
@@ -174,4 +175,40 @@ test('isSamePath на Windows не зависит от регистра', () => 
   const options = { platform: 'win32', home: 'C:\\Users\\dev' };
   assert.equal(isSamePath('C:\\git\\trade', 'c:\\GIT\\Trade', options), true);
   assert.equal(isSamePath('C:\\git\\trade', 'C:\\git\\other', options), false);
+});
+
+test('resolveContextCwd: worktree того же репозитория становится контекстом', () => {
+  const dir = tempDir();
+  try {
+    const main = makeCheckout(join(dir, 'main'));
+    const worktree = makeWorktree(join(dir, 'main', '.dsh', 'gitworktree', 'feature'), main);
+    assert.equal(real(resolveContextCwd({ origin: main, work: worktree })), real(worktree));
+    assert.equal(
+      real(resolveContextCwd({ origin: main, work: join(worktree, 'src', 'cf') })),
+      real(worktree),
+      'подкаталог worktree даёт корень worktree',
+    );
+    assert.equal(resolveContextCwd({ origin: main, work: join(main, 'src') }), main, 'подкаталог main — не переключение');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveContextCwd: чужая worktree и обычный каталог не переключают проект', () => {
+  const dir = tempDir();
+  try {
+    const main = makeCheckout(join(dir, 'main'));
+    const otherMain = makeCheckout(join(dir, 'other'));
+    const alien = makeWorktree(join(dir, 'alien-wt'), otherMain);
+    assert.equal(resolveContextCwd({ origin: main, work: alien }), main);
+    assert.equal(resolveContextCwd({ origin: main, work: join(dir, 'plain') }), main);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveContextCwd: без origin/ work — запасные значения', () => {
+  assert.equal(resolveContextCwd({ origin: '', work: '/tmp/x' }), '/tmp/x');
+  assert.equal(resolveContextCwd({ origin: '/tmp/main', work: '' }), '/tmp/main');
+  assert.equal(resolveContextCwd({ origin: '/tmp/main' }), '/tmp/main');
 });
