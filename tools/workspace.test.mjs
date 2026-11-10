@@ -265,15 +265,20 @@ test('writeProgress: since держится при той же фазе и сб�
   const dir = tempDir();
   try {
     const buildDir = join(dir, 'build');
-    writeProgress(buildDir, 'edt', 'importing');
+    const firstAt = new Date('2026-01-01T00:00:00.000Z');
+    const secondAt = new Date('2026-01-01T00:00:01.000Z');
+    const thirdAt = new Date('2026-01-01T00:00:02.000Z');
+    writeProgress(buildDir, 'edt', 'importing', undefined, firstAt);
     const first = stateOf(buildDir, { alive: () => false }).progress.edt;
-    writeProgress(buildDir, 'edt', 'importing', 'next');
+    assert.equal(first.since, firstAt.toISOString());
+    writeProgress(buildDir, 'edt', 'importing', 'next', secondAt);
     const second = stateOf(buildDir, { alive: () => false }).progress.edt;
-    assert.equal(second.since, first.since);
+    assert.equal(second.since, firstAt.toISOString(), 'та же фаза — since не меняется');
+    assert.equal(second.updated, secondAt.toISOString());
     assert.equal(second.detail, 'next');
-    writeProgress(buildDir, 'edt', 'health');
+    writeProgress(buildDir, 'edt', 'health', undefined, thirdAt);
     const third = stateOf(buildDir, { alive: () => false }).progress.edt;
-    assert.notEqual(third.since, first.since);
+    assert.equal(third.since, thirdAt.toISOString(), 'смена фазы — новый since');
     assert.equal(third.detail, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
