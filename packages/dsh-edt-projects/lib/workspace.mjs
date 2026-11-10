@@ -472,11 +472,15 @@ export function readProgress(buildDir) {
   return readJson(filePath(buildDir, 'progress')) ?? null;
 }
 
-export function writeProgress(buildDir, kind, phase, detail) {
-  const prev = readProgress(buildDir) ?? { startedAt: new Date().toISOString() };
-  const now = new Date().toISOString();
+/**
+ * @param now момент записи (для тестов передаётся явно: `since` не должен
+ *   зависеть от разрешения часов).
+ */
+export function writeProgress(buildDir, kind, phase, detail, now = new Date()) {
+  const prev = readProgress(buildDir) ?? { startedAt: now.toISOString() };
+  const stamp = now.toISOString();
   const was = prev[kind];
-  prev[kind] = { phase, since: was?.phase === phase && was.since ? was.since : now, updated: now };
+  prev[kind] = { phase, since: was?.phase === phase && was.since ? was.since : stamp, updated: stamp };
   if (detail !== undefined) prev[kind].detail = detail;
   atomicWrite(filePath(buildDir, 'progress'), `${JSON.stringify(prev, null, 2)}\n`);
 }
