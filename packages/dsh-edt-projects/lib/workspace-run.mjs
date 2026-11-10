@@ -412,13 +412,18 @@ export async function cmdRun(root, args = {}, deps = {}) {
       }
       const total = snapshot.projects.length;
       const scriptPath = writeImportScript(buildDir, snapshot.projects);
+      const seenProjects = new Set();
+      let lastProject;
       const tick = () => {
         const digest = (deps.importDigest ?? importDigest)(buildDir, offset, total, deps);
         offset = digest.offset;
         (deps.appendImportDigest ?? appendImportDigest)(buildDir, digest.lines);
         const memory = importMemoryWarning(digest.text);
         if (memory !== undefined) importWarning = memory;
-        lastImportDetail = `${digest.startedCount}/${total}${digest.current === undefined ? '' : ` — ${digest.current}`}`;
+        for (const name of digest.started ?? []) seenProjects.add(name);
+        if (digest.current !== undefined) lastProject = digest.current;
+        const count = total > 0 ? Math.min(seenProjects.size, total) : seenProjects.size;
+        lastImportDetail = `${count}/${total}${lastProject === undefined ? '' : ` — ${lastProject}`}`;
         writeProgress(buildDir, 'edt', 'importing', lastImportDetail, deps.now?.(), memory === undefined ? undefined : { warning: memory });
       };
       lastImportDetail = `0/${total}`;

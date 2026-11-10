@@ -337,13 +337,20 @@ export function prefValue(text, key) {
   return undefined;
 }
 
-/** Список отключённых инструментов: без tool, если он нужен. */
-function disabledToolsWithout(current, tool) {
+/** Список отключённых инструментов из prefs (или дефолт EDT-MCP). */
+function disabledToolsList(current) {
   const raw = prefValue(current, 'mcpDisabledTools');
-  const list = (raw === undefined ? DEFAULT_DISABLED_TOOLS : raw.split(','))
+  return (raw === undefined ? DEFAULT_DISABLED_TOOLS : raw.split(','))
     .map((item) => item.trim())
-    .filter((item) => item !== '' && item !== tool);
-  return [...new Set(list)].join(',');
+    .filter((item) => item !== '');
+}
+
+function disabledToolsWithout(current, tool) {
+  return [...new Set(disabledToolsList(current).filter((item) => item !== tool))].join(',');
+}
+
+function disabledToolsWith(current, tool) {
+  return [...new Set([...disabledToolsList(current), tool])].join(',');
 }
 
 /** prefs, включающие MCP-сервер EDT на нужном порту при старте. */
@@ -359,11 +366,13 @@ export function writePrefs(buildDir, port, options = {}) {
     // отдавать текст (Plain text mode).
     mcpPlainTextMode: String(options.plainText !== false),
   };
-  if (options.formScreenshots !== false) {
-    // get_form_screenshot выключен в EDT-MCP по умолчанию; включаем его, не
-    // трогая остальные отключённые инструменты.
-    values.mcpDisabledTools = disabledToolsWithout(current, 'get_form_screenshot');
-  }
+  // get_form_screenshot выключен в EDT-MCP по умолчанию. Список всегда
+  // приводим к настройке: при true убираем инструмент, при false — возвращаем,
+  // иначе prefs от прошлого запуска оставят его включённым.
+  values.mcpDisabledTools =
+    options.formScreenshots !== false
+      ? disabledToolsWithout(current, 'get_form_screenshot')
+      : disabledToolsWith(current, 'get_form_screenshot');
   const next = mergePrefsText(current, values);
   atomicWrite(file, next);
   return file;
@@ -545,6 +554,26 @@ export function tailFile(file, maxLen = 200) {
   return lines.length === 0 ? null : lines[lines.length - 1].slice(0, maxLen);
 }
 
+/** Длина буфера без обрезанной многобайтовой UTF-8 последовательности. */
+function completeUtf8Length(buffer) {
+  let index = buffer.length - 1;
+  let continuation = 0;
+  while (index >= 0 && (buffer[index] & 0xc0) === 0x80 && continuation < 3) {
+    index -= 1;
+    continuation += 1;
+  }
+  if (index < 0) return buffer.length;
+  const lead = buffer[index];
+  let needed;
+  if ((lead & 0x80) === 0) needed = 1;
+  else if ((lead & 0xe0) === 0xc0) needed = 2;
+  else if ((lead & 0xf0) === 0xe0) needed = 3;
+  else if ((lead & 0xf8) === 0xf0) needed = 4;
+  else return buffer.length;
+  const have = buffer.length - index;
+  return have >= needed ? buffer.length : index;
+}
+
 /** Читает файл с байтового смещения (для растущего workspace `.metadata/.log`). */
 export function readFromOffset(file, offset, { maxBytes = 512 * 1024 } = {}) {
   let fd;
@@ -556,7 +585,12 @@ export function readFromOffset(file, offset, { maxBytes = 512 * 1024 } = {}) {
     if (length === 0) return { text: '', offset: size };
     const buffer = Buffer.alloc(length);
     readSync(fd, buffer, 0, length, start);
-    return { text: buffer.toString('utf8'), offset: size };
+    const complete = completeUtf8Length(buffer);
+    return {
+      text: buffer.subarray(0, complete).toString('utf8'),
+      // Следующий вызов дочитает остаток, а не пропустит его.
+      offset: start + complete,
+    };
   } catch {
     return { text: '', offset: offset ?? 0 };
   } finally {

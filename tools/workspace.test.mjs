@@ -518,7 +518,7 @@ test('writePrefs: plain text, HTTP и включение get_form_screenshot', (
     writePrefs(buildDir, 24591, { plainText: false, formScreenshots: false });
     text = readFileSync(prefsPath(buildDir), 'utf8');
     assert.match(text, /mcpPlainTextMode=false/);
-    assert.match(text, /mcpDisabledTools=git,ask_workmate,custom\n/, 'при выключенных скриншотах список не трогаем');
+    assert.match(text, /mcpDisabledTools=git,ask_workmate,custom,get_form_screenshot\n/, 'при выключенных скриншотах инструмент снова отключён');
 
     const args = guiArgs({ wsDir: 'ws', xmx: '6g', nativeFormBufferedLayoutRender: true });
     assert.deepEqual(args.slice(-3), ['-vmargs', '-Xmx6g', '-DnativeFormBufferedLayoutRender=true']);

@@ -65,7 +65,7 @@ import {
   writePort,
   writeStamp,
 } from './workspace.mjs';
-import { cmdInit, cmdStop as stopWorkspaceNow } from './workspace-run.mjs';
+import { cmdInit, cmdStop as stopWorkspaceNow, lockState } from './workspace-run.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -816,13 +816,16 @@ export async function apply(ctx, config) {
   };
 
   /** Убеждается, что фоновый run действительно начал работу (а не упал на lock). */
-  const launchStarted = async (buildDir, timeoutMs = 3000) => {
+  const launchStarted = async (buildDir, timeoutMs = 5000) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const current = workspaceState(buildDir, { alive: cheapAlive });
       const phase = current.progress?.edt?.phase;
       if (current.label === 'starting' || current.label === 'ready' || current.label === 'failed') return true;
       if (phase !== undefined && phase !== 'ready' && phase !== 'failed') return true;
+      // run мог только взяться за lock, ещё не записав ни progress, ни pid.
+      const runLock = lockState(join(buildDir, 'init-run.lock'));
+      if (runLock.exists === true && runLock.stale === false) return true;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     return false;
@@ -1225,9 +1228,12 @@ export async function apply(ctx, config) {
         if (result.launchError !== undefined) throw new Error(`${result.launchError}\n\n${workspaceText(plan)}`);
         if (result.label === 'failed') {
           const info = describeWorkspace(plan, { alive: cheapAlive });
-          throw new Error(
-            `EDT-окружение не поднялось: ${info.detail ?? 'см. build/logs/edt.log'}${info.warning === undefined ? '' : `\n! ${info.warning}`}`,
-          );
+          const warning = info.warning;
+          const memory =
+            warning === undefined
+              ? ''
+              : `\n! импорт шёл на пределе памяти${warning.used === undefined ? '' : ` (${warning.used}/${warning.total} MB)`} — поднимите workspace.xmxImport`;
+          throw new Error(`EDT-окружение не поднялось: ${info.detail ?? 'см. build/logs/edt.log'}${memory}`);
         }
         if (result.label === 'ready') {
           return { text: `EDT уже готов (порт ${result.port ?? '-'}).\n\n${workspaceText(plan)}` };
