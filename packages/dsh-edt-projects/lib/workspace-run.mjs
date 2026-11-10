@@ -183,10 +183,11 @@ export function shouldImport(snapshot, { force } = {}, deps = {}) {
     marker.projects.every((item, index) => item === projects[index]);
   if (same) return false;
   if (settings.import === true) return true;
-  if (marker !== null) return true;
 
-  // "auto": workspace уже с проектами (например, их импортировали руками) —
-  // повторный импорт не нужен и может конфликтовать с открытой EDT.
+  // "auto": либо маркер уже есть (список мог измениться — это повод для
+  // явного restart с import: true, но не для фонового импорта), либо в
+  // workspace уже есть проекты (их импортировали руками).
+  if (marker !== null) return false;
   const registered = deps.hasRegisteredProjects ?? defaultHasRegisteredProjects;
   return !registered(registeredProjectsDir(snapshot.buildDir));
 }
@@ -308,6 +309,12 @@ export async function cmdRun(root, args = {}, deps = {}) {
     }
 
     const importNeeded = (deps.shouldImport ?? shouldImport)(snapshot, { force: args.import === true }, deps);
+    if (importNeeded && detected.cli === undefined) {
+      writeProgress(buildDir, 'edt', 'import-failed', 'в установке нет 1cedtcli — импорт невозможен; задайте workspace.import=false или полную установку EDT');
+      writeStamp(buildDir, 'failed', deps.now?.());
+      log('edt: FAILED: в установке нет 1cedtcli, импорт проектов невозможен');
+      return 1;
+    }
     if (importNeeded) {
       const scriptPath = writeImportScript(buildDir, snapshot.projects);
       writeProgress(buildDir, 'edt', 'importing', tailFile(path.join(buildDir, 'logs', 'edt-import.log')));
@@ -319,7 +326,7 @@ export async function cmdRun(root, args = {}, deps = {}) {
       ticker.unref?.();
       try {
         await (deps.runCapture ?? runCapture)(
-          detected.cli ?? detected.bin,
+          detected.cli,
           importArgs({ ...snapshot, wsDir: snapshot.wsDir, timeout: settings.importTimeout, xmxImport: settings.xmxImport }, scriptPath),
           path.join(buildDir, 'logs', 'edt-import.log'),
           deps,

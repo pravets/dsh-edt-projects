@@ -814,8 +814,17 @@ export async function apply(ctx, config) {
 
       try {
         let port = readPort(key);
-        // Занятый порт из прошлого запуска — чужой процесс: берём новый.
-        if (port !== null && (await isPortOpen(port))) port = null;
+        if (port !== null && (await isPortOpen(port))) {
+          // Кто-то уже слушает порт: если это наш MCP-сервер (DSH перезапустили,
+          // маркер потерялся), принимаем его и не поднимаем второй EDT на тот же
+          // workspace.
+          if (await probeHealth(port)) {
+            removeStamp(key, 'failed');
+            writeStamp(key, 'ready');
+            return workspaceState(key, { alive: cheapAlive });
+          }
+          port = null;
+        }
         if (port === null) {
           port = await pickFreePort(plan.settings.ports);
           writePort(key, port);

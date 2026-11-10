@@ -304,6 +304,11 @@ test('detectEdtHome: явная настройка и DSH_1C_EDT_HOME', () => {
     assert.equal(fromConfig.home, home);
     assert.equal(fromConfig.source, 'config');
     assert.equal(fromConfig.mcpBundle, false);
+    assert.equal(fromConfig.cli, undefined, 'без 1cedtcli импорт невозможен');
+
+    touch(join(home, '1cedtcli.exe'));
+    const withCli = detectEdtHome(normalizeWorkspaceSettings({ home: { win32: home } }), { platform: 'win32', env: {} });
+    assert.equal(withCli.cli, join(home, '1cedtcli.exe'));
 
     const fromEnv = detectEdtHome(normalizeWorkspaceSettings({}), { platform: 'win32', env: { DSH_1C_EDT_HOME: home } });
     assert.equal(fromEnv.source, 'env');

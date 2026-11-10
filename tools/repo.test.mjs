@@ -164,7 +164,7 @@ test('uniqueRepositories схлопывает дубликаты по норма
     const main = makeCheckout(join(dir, 'main'));
     const worktree = makeWorktree(join(dir, 'wt'), main);
     const repo = repositoryAt(worktree);
-    assert.equal(uniqueRepositories([repo, repo, { ...repo, root: worktree.toUpperCase() }]).length, 1);
+    assert.equal(uniqueRepositories([repo, repo, { ...repo, root: `${worktree}/` }]).length, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -641,7 +641,14 @@ export function detectEdtHome(settings, { platform = process.platform, env = pro
     const home = path.normalize(explicit);
     const bin = path.join(home, binary);
     if (!existsSync(bin)) return { error: `в ${home} нет ${binary}`, home };
-    return { home, bin, cli: path.join(home, cli), mcpBundle: hasMcpBundle(home), source: text(env?.DSH_1C_EDT_HOME) ? 'env' : 'config' };
+    const cliPath = path.join(home, cli);
+    return {
+      home,
+      bin,
+      cli: existsSync(cliPath) ? cliPath : undefined,
+      mcpBundle: hasMcpBundle(home),
+      source: text(env?.DSH_1C_EDT_HOME) ? 'env' : 'config',
+    };
   }
 
   const searchRoots = roots ?? EDT_ROOTS[platform] ?? [];
@@ -667,10 +674,11 @@ export function detectEdtHome(settings, { platform = process.platform, env = pro
   }
   candidates.sort((left, right) => compareVersion(right.version, left.version));
   const chosen = candidates.find((candidate) => candidate.mcpBundle) ?? candidates[0];
+  const cliPath = path.join(chosen.home, cli);
   return {
     home: chosen.home,
     bin: path.join(chosen.home, binary),
-    cli: path.join(chosen.home, cli),
+    cli: existsSync(cliPath) ? cliPath : undefined,
     mcpBundle: chosen.mcpBundle,
     source: 'autodetect',
   };
@@ -720,7 +728,8 @@ export async function probeHealth(port, deps = {}) {
   if (typeof implementation !== 'function') return false;
   try {
     const response = await implementation(healthUrl(port), { signal: AbortSignal.timeout(deps.timeoutMs ?? 3000) });
-    return response.status >= 200 && response.status < 500;
+    // /health EDT отвечает 200; 3xx/4xx на этом порту — посторонний сервис.
+    return response.status >= 200 && response.status < 300;
   } catch {
     return false;
   }

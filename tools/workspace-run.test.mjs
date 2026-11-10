@@ -258,6 +258,31 @@ test('cmdRun: ошибка импорта — failed, EDT не запускае�
   }
 });
 
+test('cmdRun: нет 1cedtcli — импорт не запускается, failed', async () => {
+  const root = tempRoot();
+  try {
+    projectDir(root, 'src/cf');
+    const snapshot = snapshotFor(root, { import: true });
+    const buildDir = join(root, 'build');
+    writePort(buildDir, 23456);
+    writeWorkspaceSnapshot(buildDir, snapshot);
+    let launched = 0;
+    const code = await cmdRun(root, {}, {
+      snapshot,
+      detectEdtHome: () => ({ home: root, bin: join(root, 'fake-1cedt'), cli: undefined, mcpBundle: true }),
+      runCapture: async () => {
+        launched++;
+      },
+      spawnDetached: () => ({ pid: 1 }),
+    });
+    assert.equal(code, 1);
+    assert.equal(launched, 0);
+    assert.match(readProgress(buildDir).edt.detail, /1cedtcli/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('cmdRun: установка EDT не найдена — failed без процессов', async () => {
   const root = tempRoot();
   try {
@@ -342,6 +367,11 @@ test('shouldImport: режимы true/false/auto и смена списка пр
       shouldImport({ ...base, projects: ['a'], settings: normalizeWorkspaceSettings({ import: true }) }),
       true,
       'список проектов изменился',
+    );
+    assert.equal(
+      shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: 'auto' }) }),
+      false,
+      'auto не переимпортирует при изменившемся списке — только явный restart',
     );
     assert.equal(shouldImport({ ...base, projects: [], settings: normalizeWorkspaceSettings({ import: true }) }), false);
   } finally {
