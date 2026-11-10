@@ -49,7 +49,7 @@
 
 ### Проверки
 
-- 184 теста: добавлены `repo.test.mjs` (worktree и task space без git),
+- 186 тестов: добавлены `repo.test.mjs` (worktree и task space без git),
   `workspace.test.mjs` (настройки, проекты, порт, установка EDT, состояние),
   `workspace-run.test.mjs` (подъём, импорт, ошибки, остановка) и кейсы
   наследования в `config`/`enable`/`rules`/`schema`.
