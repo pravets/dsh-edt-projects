@@ -1,6 +1,6 @@
 {
   "name": "dsh-edt-projects",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "description": "Project-scoped MCP hub for 1C development: active only in selected projects, EDT connected up front there, a per-worktree EDT workspace under build/ws, BSL Language Server, a task tracker and the v8std standards MCP mounted on demand, bundled SonarQube and GitLab skills, with model-facing usage rules",
   "license": "MIT",
