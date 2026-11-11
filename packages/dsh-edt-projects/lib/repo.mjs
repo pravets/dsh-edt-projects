@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { normalizeProjectPath } from './enable.mjs';
+import { normalizeProjectPath, matchesProject } from './enable.mjs';
 
 /** Сколько родителей просматривать в поисках `.git`. */
 const MAX_UP = 8;
@@ -150,4 +150,36 @@ export function uniqueRepositories(repositories, { platform = process.platform }
     out.push(repo);
   }
   return out;
+}
+
+/**
+ * Каталог, от которого плагин считает проект.
+ *
+ * `origin` — неизменяемый `session.header.cwd`, `work` — эффективный каталог
+ * сессии (`ctx.workingDirectory`). Переключаемся на work только если это
+ * linked worktree, связанный с исходным репозиторием: `cd` в подкаталог или в
+ * чужой репозиторий проект не переключает, а worktree того же репозитория —
+ * переключает. Возвращается корень worktree, а не подкаталог, чтобы настройки
+ * и окружение не зависели от `cd` внутри него.
+ * @returns {string} абсолютный каталог проекта.
+ */
+export function resolveContextCwd({ origin, work, platform = process.platform } = {}) {
+  if (typeof origin !== 'string' || origin === '') {
+    return typeof work === 'string' && work !== '' ? work : process.cwd();
+  }
+  if (typeof work !== 'string' || work === '' || isSamePath(work, origin, { platform })) return origin;
+
+  const workRepo = repositoryAt(work, { platform });
+  if (workRepo === undefined || workRepo.isWorktree !== true) return origin;
+
+  const originRepo = repositoryAt(origin, { platform });
+  if (originRepo === undefined) return origin;
+
+  const related =
+    isSamePath(workRepo.mainRoot, originRepo.root, { platform }) ||
+    isSamePath(workRepo.mainRoot, origin, { platform }) ||
+    matchesProject(originRepo.root, workRepo.mainRoot, { platform }) ||
+    matchesProject(origin, workRepo.mainRoot, { platform });
+
+  return related ? workRepo.root : origin;
 }

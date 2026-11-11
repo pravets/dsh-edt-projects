@@ -29,6 +29,7 @@ import {
   shouldImport,
   statusReport,
   waitHealth,
+  waitReady,
 } from '../packages/dsh-edt-projects/lib/workspace-run.mjs';
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), 'ws-run-'));
@@ -95,6 +96,10 @@ test('cmdInit занимает порт, пишет prefs и запускает 
     assert.equal(code, 0);
     assert.equal(readPort(join(root, 'build')), 23456);
     assert.match(readFileSync(prefsPath(join(root, 'build')), 'utf8'), /mcpServerPort=23456/);
+    const prefs = readFileSync(prefsPath(join(root, 'build')), 'utf8');
+    assert.match(prefs, /mcpServerHttpEnabled=true/);
+    assert.match(prefs, /mcpPlainTextMode=true/, 'plain text включается до запуска EDT');
+    assert.match(prefs, /mcpDisabledTools=git,ask_workmate/, 'get_form_screenshot включён до запуска EDT');
     assert.equal(existsSync(join(root, 'build', 'workspace.json')), true);
     assert.equal(spawns.length, 1);
     assert.deepEqual(spawns[0].args.slice(1), ['run', '--root', root]);
@@ -179,12 +184,16 @@ test('cmdRun без импорта запускает EDT и дожидаетс�
         spawned.push({ command, args, cwd });
         return { pid: 4242 };
       },
-      waitHealth: async () => true,
+      waitReady: async () => ({ ok: true }),
     });
     assert.equal(code, 0);
     assert.equal(spawned.length, 1);
     assert.equal(spawned[0].command, join(root, 'fake-1cedt'));
     assert.deepEqual(spawned[0].args.slice(0, 3), ['-nosplash', '-data', join(buildDir, 'ws')]);
+    assert.ok(spawned[0].args.includes('-DnativeFormBufferedLayoutRender=true'), 'флаг скриншотов форм');
+    const prefs = readFileSync(prefsPath(buildDir), 'utf8');
+    assert.match(prefs, /mcpPlainTextMode=true/);
+    assert.match(prefs, /mcpDisabledTools=git,ask_workmate\n/);
     assert.equal(readPid(buildDir).pid, 4242);
     assert.equal(stateOf(buildDir, { alive: () => true }).label, 'ready');
     assert.equal(readProgress(buildDir).edt.phase, 'ready');
@@ -203,18 +212,26 @@ test('cmdRun с импортом пишет скрипт, зовёт 1cedtcli и
     writeWorkspaceSnapshot(buildDir, snapshot);
     const captures = [];
     const spawned = [];
+    const metadataLog = join(buildDir, 'ws', '.metadata', '.log');
+    mkdirSync(join(buildDir, 'ws', '.metadata'), { recursive: true });
+    writeFileSync(metadataLog, 'old line\n', 'utf8');
     const code = await cmdRun(root, {}, {
       snapshot,
       detectEdtHome: () => fakeEdt(root),
       resolveEdtVm: () => undefined,
       runCapture: async (command, args) => {
         captures.push({ command, args });
+        writeFileSync(
+          metadataLog,
+          `${readFileSync(metadataLog, 'utf8')}!MESSAGE Project context is being started: cf (EXISTING_DATA_IMPORT)\n!MESSAGE Project context is started: cf\n`,
+          'utf8',
+        );
       },
       spawnDetached: () => {
         spawned.push(1);
         return { pid: 4242 };
       },
-      waitHealth: async () => true,
+      waitReady: async () => ({ ok: true }),
     });
     assert.equal(code, 0);
     assert.equal(captures.length, 1);
@@ -223,6 +240,8 @@ test('cmdRun с импортом пишет скрипт, зовёт 1cedtcli и
     assert.match(readFileSync(join(buildDir, 'import.script'), 'utf8'), new RegExp(`import --project "${cf.replace(/\\/g, '\\\\')}"`));
     assert.equal(existsSync(join(buildDir, 'edt-imported')), true);
     assert.equal(spawned.length, 1);
+    assert.match(readFileSync(join(buildDir, 'logs', 'edt-import.log'), 'utf8'), /Project context is started: cf/);
+    assert.equal(readProgress(buildDir).edt.phase, 'ready');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -247,12 +266,12 @@ test('cmdRun: ошибка импорта — failed, EDT не запускае�
         spawned++;
         return { pid: 1 };
       },
-      waitHealth: async () => true,
+      waitReady: async () => ({ ok: true }),
     });
     assert.equal(code, 1);
     assert.equal(spawned, 0);
     assert.equal(stateOf(buildDir, { alive: () => false }).label, 'failed');
-    assert.match(readProgress(buildDir).edt.detail, /edt-import\.log/);
+    assert.match(readProgress(buildDir).edt.detail, /metadata\/\.log|edt-import\.log/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -318,7 +337,7 @@ test('cmdRun: health timeout — failed, но процесс не убиваем
       snapshot,
       detectEdtHome: () => fakeEdt(root),
       spawnDetached: () => ({ pid: 4242 }),
-      waitHealth: async () => false,
+      waitReady: async () => ({ ok: false, reason: 'timeout', detail: 'boom' }),
     });
     assert.equal(code, 1);
     assert.equal(stateOf(buildDir, { alive: () => true }).label, 'failed');
@@ -344,7 +363,7 @@ test('cmdRun не запускает второй run при занятом run-
         return { pid: 1 };
       },
     });
-    assert.equal(code, 0, 'второй запуск не ошибка, просто выходит');
+    assert.equal(code, 2, 'занятый lock — код 2, чтобы вызывающий не считал запуск успешным');
     assert.equal(spawned, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -485,6 +504,76 @@ test('statusReport: строки для человека и данные', () =>
     assert.match(report.lines.join('\n'), /порт: 23456/);
     assert.match(report.lines.join('\n'), /импортировано проектов: 1/);
     assert.equal(report.data.port, 23456);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cmdInit перехватывает осиротевший run-lock', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    mkdirSync(buildDir, { recursive: true });
+    writeFileSync(join(buildDir, 'init-run.lock'), JSON.stringify({ pid: 999999, at: new Date(0).toISOString() }), 'utf8');
+    let spawns = 0;
+    const code = await cmdInit(root, {}, {
+      snapshot: snapshotFor(root),
+      pickFreePort: async () => 24589,
+      isPortFree: async () => true,
+      alive: () => false,
+      spawnDetached: () => {
+        spawns++;
+        return { pid: 1 };
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(spawns, 1);
+    assert.match(readFileSync(join(buildDir, 'logs', 'init.log'), 'utf8'), /снят осиротевший run-lock/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cmdInit: живой run-lock — код 4 и никакого второго run', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    mkdirSync(buildDir, { recursive: true });
+    writeFileSync(
+      join(buildDir, 'init-run.lock'),
+      JSON.stringify({ pid: process.pid, at: new Date().toISOString(), image: 'node.exe' }),
+      'utf8',
+    );
+    let spawns = 0;
+    const code = await cmdInit(root, {}, {
+      snapshot: snapshotFor(root),
+      pickFreePort: async () => 24589,
+      isPortFree: async () => true,
+      alive: () => true,
+      spawnDetached: () => {
+        spawns++;
+        return { pid: 1 };
+      },
+    });
+    assert.equal(code, 4);
+    assert.equal(spawns, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('waitReady: смерть процесса — ранний process-exited с хвостом edt.log', async () => {
+  const root = tempRoot();
+  try {
+    const log = join(root, 'edt.log');
+    writeFileSync(log, 'WARNING: Annotation classes\nERROR: java.lang.UnsupportedClassVersionError\n', 'utf8');
+    const result = await waitReady(
+      { port: 23456, pid: 4242, alive: () => false, logPath: log, timeoutMs: 60_000 },
+      { probeHealth: async () => false, sleep: async () => {}, pollMs: 1, processGraceMs: 0 },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'process-exited');
+    assert.match(result.detail, /UnsupportedClassVersionError/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

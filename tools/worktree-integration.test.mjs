@@ -12,17 +12,22 @@ import { join } from 'node:path';
 import { apply } from '../packages/dsh-edt-projects/lib/index.js';
 
 /** Минимальный контекст: инструменты, события, промпт и навыки. */
-function fakeContext() {
+function fakeContext(options = {}) {
   const sections = new Map();
   const handlers = new Map();
   const disposers = [];
+  const tools = [];
   const ctx = {
     logger: { warn() {}, info() {} },
     tools: {
-      register: () => () => {},
+      register: (definition) => {
+        tools.push(definition);
+        return () => {};
+      },
       guard: () => {},
       schemas: () => [],
     },
+    workingDirectory: options.workingDirectory,
     on(event, handler) {
       handlers.set(event, handler);
       return () => handlers.delete(event);
@@ -46,7 +51,7 @@ function fakeContext() {
       }
     },
   };
-  return { ctx, sections, handlers, disposers };
+  return { ctx, sections, handlers, disposers, tools };
 }
 
 function fixture({ enabledFile } = {}) {
@@ -85,6 +90,27 @@ test('worktree: промпт включает правила 1С и блок о�
     const mainText = section.text({ agent: agentIn(main) });
     assert.match(mainText, /Работа с 1С через MCP/);
     assert.doesNotMatch(mainText, /### Окружение EDT в worktree/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('worktree: эффективный каталог сессии главнее header.cwd', async () => {
+  const { dir, main, worktree } = fixture({
+    enabledFile: { enabled: true, servers: { edt: { url: 'http://127.0.0.1:8765/mcp' } } },
+  });
+  try {
+    const { ctx, sections, tools } = fakeContext({ workingDirectory: { get: () => worktree } });
+    await apply(ctx, {});
+    const text = sections.get('mcp-rules:1c').text({ agent: agentIn(main) });
+    assert.match(text, /### Окружение EDT в worktree/);
+    assert.match(text, /build[\\/]ws/);
+
+    const configTool = tools.find((definition) => definition.name === 'edt_config');
+    assert.ok(configTool, 'edt_config зарегистрирован');
+    const shown = await configTool.execute({ action: 'show' }, { agent: agentIn(main) });
+    assert.match(shown.text, /Каталог: исходный .*main, рабочий .*worktree/);
+    assert.match(shown.text, /EDT-окружение worktree/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

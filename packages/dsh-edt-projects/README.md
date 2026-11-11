@@ -14,7 +14,13 @@ SonarQube/GitLab.
 В **linked git worktree** плагин поднимает отдельное окружение EDT
 (`<worktree>/build/ws`, свой порт и логи), импортирует проекты и монтирует
 `mcp__edt__*` туда; включённость и настройки наследуются от основного checkout.
+Работает совместно с [dsh-git-worktree](https://github.com/LaoYueHanNi/dsh-git-worktree)
+(`<repo>/.dsh/gitworktree/<branch>/`), `build/` не требует ручной настройки.
 Управление — инструмент `edt_workspace`.
+
+В workspace включаются plain text mode (DSH не рендерит embedded resource) и
+`get_form_screenshot` с JVM-флагом `-DnativeFormBufferedLayoutRender=true`;
+выключаются настройками `workspace.plainText` и `workspace.formScreenshots`.
 
 ## Установка
 

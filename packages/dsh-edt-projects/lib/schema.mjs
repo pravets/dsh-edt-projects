@@ -33,6 +33,10 @@ export const DEFAULTS = {
     projects: [],
     ports: { min: 20000, max: 39999 },
     stopOnSessionEnd: true,
+    // MCP-инструменты EDT-MCP, которые нам нужны в worktree: plain text
+    // вместо embedded resource (DSH их не рендерит) и скриншоты форм.
+    plainText: true,
+    formScreenshots: true,
   },
   tests: {
     yaxunit: { enabled: false, path: '', project: '' },
@@ -53,12 +57,24 @@ export const KNOWN = {
   'servers.*.url': { type: 'string', description: 'Адрес MCP-сервера (streamable-http).' },
   'servers.*.headers': { type: 'object', description: 'Заголовки запросов, например Authorization.' },
   'servers.*.root': { type: 'string', description: 'Корень рабочего пространства (для bsl).' },
+  'servers.*.transport': { type: 'string', description: 'Транспорт: stdio или streamable-http.' },
+  'servers.*.disabled': { type: 'boolean', description: 'Не монтировать сервер.' },
+  'servers.*.unavailable': { type: 'boolean', description: 'Сервер описан, но не настроен (нет переменных окружения).' },
+  'servers.*.command': { type: 'string', description: 'Команда запуска для stdio-сервера.' },
+  'servers.*.args': { type: 'array', description: 'Аргументы команды stdio-сервера.' },
+  'servers.*.env': { type: 'object', description: 'Переменные окружения stdio-сервера.' },
+  'servers.*.cwd': { type: 'string', description: 'Рабочий каталог stdio-сервера.' },
+  'servers.*.maxInstructionBytes': { type: 'number', description: 'Предел текста инструкций сервера.' },
   'servers.*.lazy': { type: 'boolean', description: 'Не подключать на старте, только по edt_pin.' },
   'servers.*.shared': { type: 'boolean', description: 'Устарело: серверы всегда монтируются в скоупе сессии.' },
   'servers.*.provision': { type: 'boolean', description: 'Параметры запуска добираются на edt_pin.' },
   'servers.*.toolCallTimeoutMs': { type: 'number', description: 'Таймаут вызова инструмента.' },
   'servers.*.failOnStartupError': { type: 'boolean', description: 'Падать, если стартовое подключение не удалось.' },
   'servers.*.reconnect': { type: 'object', description: 'Политика переподключения.' },
+  'servers.*.reconnect.enabled': { type: 'boolean', description: 'Включено ли переподключение.' },
+  'servers.*.reconnect.initialDelayMs': { type: 'number', description: 'Начальная задержка переподключения, мс.' },
+  'servers.*.reconnect.maxDelayMs': { type: 'number', description: 'Максимальная задержка переподключения, мс.' },
+  'servers.*.reconnect.maxAttempts': { type: 'number', description: 'Максимум попыток переподключения.' },
   'servers.bsl.jar': { type: 'string', description: 'Готовый jar BSL Language Server.' },
   'servers.bsl.url': { type: 'string', description: 'Прямой URL на jar вместо GitHub.' },
   'servers.bsl.version': { type: 'string', description: 'Тег релиза BSL LS, например v1.0.7.' },
@@ -86,6 +102,8 @@ export const KNOWN = {
   'workspace.ports.min': { type: 'number', description: 'Нижняя граница диапазона портов.' },
   'workspace.ports.max': { type: 'number', description: 'Верхняя граница диапазона портов.' },
   'workspace.stopOnSessionEnd': { type: 'boolean', description: 'Останавливать EDT, когда закрылась последняя сессия на этом worktree.' },
+  'workspace.plainText': { type: 'boolean', description: 'Plain text mode EDT-MCP вместо embedded resource (DSH их не рендерит).' },
+  'workspace.formScreenshots': { type: 'boolean', description: 'Включить get_form_screenshot и JVM-флаг nativeFormBufferedLayoutRender.' },
   'tests.yaxunit.enabled': { type: 'boolean', description: 'Включить правила тестируемости YAxUnit.' },
   'tests.yaxunit.path': { type: 'string', description: 'Каталог тестов как образец стиля.' },
   'tests.yaxunit.project': { type: 'string', description: 'EDT-проект, в который писать тесты.' },
@@ -215,6 +233,15 @@ export function validateConfig(config) {
     errors.push(`projects: ожидался массив путей, получено ${typeof config.projects}`);
   } else if (Array.isArray(config.projects) && !config.projects.every((item) => typeof item === 'string')) {
     errors.push('projects: ожидался массив строк');
+  }
+
+  if (isPlainObject(config.servers)) {
+    for (const [name, server] of Object.entries(config.servers)) {
+      if (!isPlainObject(server)) continue;
+      if (Array.isArray(server.args) && !server.args.every((item) => typeof item === 'string')) {
+        errors.push(`servers.${name}.args: ожидался массив строк`);
+      }
+    }
   }
 
   if (isPlainObject(config.workspace)) {

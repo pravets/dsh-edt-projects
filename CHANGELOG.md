@@ -10,6 +10,65 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-10
+
+### Исправлено
+
+- **Worktree распознаётся по эффективному каталогу сессии.** Если
+  `session.header.cwd` — основной checkout, а `workingDirectory` указывает в
+  linked worktree этого же репозитория (в т.ч. `<repo>/.dsh/gitworktree/<branch>/`
+  от `dsh-git-worktree`), плагин считает проектом worktree: настройки, вики,
+  BSL, окружение и URL `edt` берутся из него. `edt_config show` показывает
+  исходный и рабочий каталоги, а `edt_config init/upgrade` пишет файл в рабочий.
+- **`edt_workspace root=…` влияет и на URL `edt`**: переопределение становится
+  контекстом сессии до её конца, поэтому после `init` инструменты монтируются на
+  порт этого workspace, а не на адрес основного checkout.
+- **Ложное «бандл EDT-MCP не найден»** убрано: бандл ищется и в пользовательской
+  configuration area (`~/.eclipse/org.eclipse.platform_*/…`,
+  `simpleconfigurator/bundles.info`), а установка больше не выбирается по этому
+  признаку. До `ready` сообщение говорит «не подтверждён, проверит /health».
+- **Java выбирается по `-Dosgi.requiredJavaVersion`** из `1cedt.ini` (при
+  наличии — `-vm` из ini) и ближайшему `jdk-full-<N>` рядом с установкой, а не
+  жёстким `jdk-full-17`. Выбранная Java пишется в `init.log`, `status` и
+  `edt_workspace`.
+- **Мёртвый процесс EDT замечается сразу**: если pid умер, а `/health` молчит
+  15 с, запуск переходит в `failed` с хвостом `edt.log`, не дожидаясь
+  `startTimeout` (30 мин).
+- **Осиротевший `init-run.lock` перехватывается** (мёртвый pid / чужой образ /
+  возраст), занятый живой lock даёт код 2/4, а `edt_workspace init|restart`
+  возвращает ошибку с хвостом лога вместо «запущено в фоне».
+- **Прогресс импорта виден в `status`**: «12/19 — <проект>» из
+  `build/ws/.metadata/.log`; значимые строки копируются в `edt-import.log`
+  (раньше он оставался пустым). При загрузке памяти ≥85 % — предупреждение
+  поднять `workspace.xmxImport`.
+
+### Добавлено
+
+- **Plain text mode** для workspace: `mcpPlainTextMode=true` в prefs до старта EDT, чтобы
+  markdown-инструменты EDT-MCP не отдавали embedded resource, который DSH не
+  рендерит (`workspace.plainText`, по умолчанию `true`). Сервер читает ключ при
+  каждом вызове, но preference store кэшируется — смена на работающем EDT требует
+  `edt_workspace action=restart`; отдельной env-переменной у EDT-MCP нет.
+- **`get_form_screenshot`** включён: EDT запускается с
+  `-DnativeFormBufferedLayoutRender=true` после `-vmargs`, а prefs
+  `mcpDisabledTools` не содержат инструмент (`workspace.formScreenshots`, по
+  умолчанию `true`). На Windows флаг включает буферизованный рендер форм на всю
+  сессию — это поведение EDT, предупреждено в README.
+- **`edt_servers` показывает `starting`**, пока EDT-окружение не готово, вместо
+  `mounted` с нулём инструментов.
+- Схема: `servers.*.transport`, `disabled`, `unavailable`, `command`, `args`,
+  `env`, `cwd`, `maxInstructionBytes`, `servers.*.reconnect.*`,
+  `workspace.plainText`, `workspace.formScreenshots`; ключи из
+  `cordis.patch.yml` больше не дают предупреждений.
+- README: плашка Awesome DSH Plugin и раздел о совместной работе с
+  `dsh-git-worktree`.
+
+### Проверки
+
+- 201 тест: добавлены `resolveContextCwd`, `requiredJava`/`resolveEdtVm` (Java 25),
+  `mcpEvidence`, prefs plain text/скриншотов, прогресса импорта, памяти,
+  stale/live lock и `waitReady` при смерти процесса.
+
 ## [0.12.0] - 2026-11-10
 
 ### Добавлено
