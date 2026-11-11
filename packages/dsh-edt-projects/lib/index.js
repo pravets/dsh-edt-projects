@@ -43,7 +43,7 @@ import { normalizeWiki, targetPathOf, writeDenialReason } from './wiki.mjs';
 import { normalizeTestTooling } from './tests.mjs';
 import { initFile, upgradeFile } from './config-file.mjs';
 import { stringifyConfig, validateConfig } from './schema.mjs';
-import { createSkillsProvider } from './skills.mjs';
+import { createSkillsProvider, skillStates } from './skills.mjs';
 import { repositoriesUnder, repositoryAt, resolveContextCwd } from './repo.mjs';
 import {
   BUILD_DIR,
@@ -366,6 +366,17 @@ const activationReason = (activation) => {
     default:
       return 'проект не выбран: нет .dsh-1c.json и его нет в projects';
   }
+};
+
+/** Причина включения навыка для `edt_config show`. */
+const skillReason = (reason) => {
+  if (typeof reason !== 'string') return 'нет флага и маркера репозитория';
+  if (reason === 'flag') return 'флаг enabled: true';
+  if (reason === 'off') return 'флаг enabled: false';
+  if (reason === 'projectKey') return 'задан sonar.projectKey';
+  if (reason === 'server') return 'настроен сервер sonarqube';
+  if (reason.startsWith('marker:')) return `маркер ${reason.slice('marker:'.length)}`;
+  return 'нет флага и маркера репозитория';
 };
 
 /**
@@ -1303,9 +1314,13 @@ export async function apply(ctx, config) {
               : workspace.state === 'error'
                 ? `EDT-окружение worktree: ошибка — ${workspace.message}`
                 : 'EDT-окружение worktree: выключено (поднимается только в git worktree)';
+          const skillsLine = `Навыки: ${skillStates(effective.config, context.cwd)
+            .map((skill) => `${skill.name.replace('edt-mcp-project-', '')} — ${skill.enabled ? 'включён' : 'выключен'} (${skillReason(skill.reason)})`)
+            .join(', ')}`;
           const head = [
             `Проект: ${activation.enabled ? 'включён' : 'выключен'} — ${activationReason(activation)}`,
             dirsLine,
+            skillsLine,
             `Источники: ${effective.sources.length > 0 ? effective.sources.join(', ') : 'только cordis.patch.yml'}`,
             workspaceLine,
             `Действующие настройки:\n${stringifyConfig(effective.config)}`,
