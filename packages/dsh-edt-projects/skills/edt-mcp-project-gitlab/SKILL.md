@@ -170,17 +170,24 @@ Rules for the body:
 
 ## Creating a merge request
 
-Create without interactive prompts, otherwise the command blocks the session:
+Prepare the body first: `$description` by the rules above or, when the repository
+has a template, let `--template` fill it. Create without interactive prompts,
+otherwise the command blocks the session.
+
+With a repository template (glab 1.113 makes `--template` and `--description`
+mutually exclusive, so the template supplies the body):
 
 ```powershell
 glab mr create `
   --source-branch $branch `
   --target-branch $target `
   --title "<task> <summary>" `
-  --description "<one-line description>" `
-  --remove-source-branch `
+  --template <template-name> `
   --yes --no-editor
 ```
+
+Without a template, swap `--template <template-name>` for
+`--description $description`. A multi-line body goes through the API below.
 
 Flag notes:
 
@@ -190,8 +197,12 @@ Flag notes:
 - `--draft` / `--wip` creates a draft; do not create ready-for-review MRs for
   unfinished work.
 - `--reviewer <user>` and `--label <name>` repeat or take comma-separated lists.
-- `--squash-before-merge` / `--remove-source-branch` omit to use project
-  defaults; pass only what the user or the repository convention asks for.
+- `--squash-before-merge` and `--remove-source-branch` are not passed by default:
+  omitting them keeps the project settings. Add them only when the user or the
+  repository convention asks, because `--remove-source-branch` deletes the
+  source branch after the merge.
+- `--description` and `--template` cannot be combined; `--template` also cannot
+  be combined with `--fill` or `--related-issue`.
 
 For a multi-line body use the API, because the description is JSON and a
 PowerShell here-string loses nothing:
@@ -254,23 +265,38 @@ is the stable one, the `note` subcommands are marked experimental by glab.
 ### Read unresolved discussions
 
 ```powershell
-# Convenience (experimental): unresolved diff threads as JSON
+# Convenience (experimental): every unresolved discussion, diff and general alike
+glab mr note list <iid> --state unresolved -F json
+
+# Narrow it to diff threads only when that is what the user asked for
 glab mr note list <iid> --state unresolved --type diff -F json
 
-# Stable: every discussion of the merge request
-glab api "projects/:id/merge_requests/<iid>/discussions?per_page=100" | ConvertFrom-Json |
-  ForEach-Object {
-    $thread = $_
-    foreach ($note in $thread.notes) {
-      if ($note.system -eq $true) { continue }
-      $file = $note.position.new_path
-      $line = $note.position.new_line
-      "discussion=$($thread.id) resolvable=$($note.resolvable) resolved=$($note.resolved) author=$($note.author.username) at=${file}:${line}"
-      $note.body
-      ""
+# Stable: every discussion of the merge request, all pages
+$threads = @()
+for ($page = 1; ; $page++) {
+  $chunk = glab api "projects/:id/merge_requests/<iid>/discussions?per_page=100&page=$page" | ConvertFrom-Json
+  $threads += $chunk
+  if ($chunk.Count -lt 100) { break }
+}
+$threads | ForEach-Object {
+  $thread = $_
+  foreach ($note in $thread.notes) {
+    if ($note.system -eq $true) { continue }
+    # A comment on a removed line has no new_* position; fall back to old_*.
+    $where = if ($null -eq $note.position) { 'general' } else {
+      $file = $note.position.new_path ?? $note.position.old_path
+      $line = $note.position.new_line ?? $note.position.old_line
+      "${file}:${line}"
     }
+    "discussion=$($thread.id) resolvable=$($note.resolvable) resolved=$($note.resolved) author=$($note.author.username) at=$where"
+    $note.body
+    ""
   }
+}
 ```
+
+Do not filter by `--type diff` when checking readiness: a general resolvable
+discussion can block "all threads must be resolved" just like a diff thread.
 
 Field notes: a discussion id is the 40-character hex string in `id`; `notes[]`
 carries `body`, `author.username`, `resolvable`, `resolved`, `system` and

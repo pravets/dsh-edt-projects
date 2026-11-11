@@ -82,13 +82,21 @@ branch (`feature/2520`), from `AGENTS.md`, or ask.
 
 ```powershell
 # With a repository template; --template takes a name from .gitlab/merge_request_templates/
+# and fills the description itself. Do not combine it with --description:
+# glab 1.113 marks --template and --description mutually exclusive.
 glab mr create `
   --source-branch $branch `
   --target-branch $target `
   --template <template-name> `
   --title "<task> <summary>" `
-  --description "<short summary>" `
-  --remove-source-branch `
+  --yes --no-editor
+
+# Without a template: pass the prepared body through --description
+glab mr create `
+  --source-branch $branch `
+  --target-branch $target `
+  --title "<task> <summary>" `
+  --description $description `
   --yes --no-editor
 ```
 
@@ -96,20 +104,26 @@ glab mr create `
 but ignores the template; `--fill --yes` is the fastest path for a small change
 only when the user does not care about the body.
 
+`--remove-source-branch`, `--draft`, `--label` and `--reviewer` are not part of
+the default command: omitting them keeps the project settings, and
+`--remove-source-branch` deletes the source branch after the merge.
+
 ## Create with a multi-line body through the API
 
 ```powershell
 $body = @{
-  source_branch        = $branch
-  target_branch        = $target
-  title                = "<task> <summary>"
-  description          = $description
-  remove_source_branch = $true
-  squash               = $false
-} | ConvertTo-Json -Depth 5
+  source_branch = $branch
+  target_branch = $target
+  title         = "<task> <summary>"
+  description   = $description
+}
+# Add these only when the user or the repository convention asks; leaving them
+# out keeps the project defaults:
+# $body.remove_source_branch = $true
+# $body.squash = $true
 
 $bodyPath = Join-Path $env:TEMP 'mr.json'
-[System.IO.File]::WriteAllText($bodyPath, $body, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($bodyPath, ($body | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
 $mr = glab api --method POST "projects/:fullpath/merge_requests" --header "Content-Type: application/json" --input $bodyPath | ConvertFrom-Json
 "iid=$($mr.iid) url=$($mr.web_url) status=$($mr.detailed_merge_status)"
 ```
@@ -139,34 +153,49 @@ glab mr update <iid> --reviewer "+<username>"
 ## Review remarks
 
 ```powershell
-# Convenience (experimental in glab): unresolved diff threads
+# Convenience (experimental in glab): every unresolved discussion, diff and general
+glab mr note list <iid> --state unresolved -F json
+
+# Narrow to diff threads only when the user asked for that
 glab mr note list <iid> --state unresolved --type diff -F json
 
-# Stable route: every discussion with notes and positions
-glab api "projects/:id/merge_requests/<iid>/discussions?per_page=100" | ConvertFrom-Json |
-  ForEach-Object {
-    $thread = $_
-    foreach ($note in $thread.notes) {
-      if ($note.system -eq $true) { continue }
-      "discussion=$($thread.id) resolvable=$($note.resolvable) resolved=$($note.resolved) " +
-        "author=$($note.author.username) at=$($note.position.new_path):$($note.position.new_line)"
-      $note.body
-      ""
+# Stable route: every discussion with notes and positions, all pages
+$threads = @()
+for ($page = 1; ; $page++) {
+  $chunk = glab api "projects/:id/merge_requests/<iid>/discussions?per_page=100&page=$page" | ConvertFrom-Json
+  $threads += $chunk
+  if ($chunk.Count -lt 100) { break }
+}
+$threads | ForEach-Object {
+  $thread = $_
+  foreach ($note in $thread.notes) {
+    if ($note.system -eq $true) { continue }
+    $where = if ($null -eq $note.position) { 'general' } else {
+      $file = $note.position.new_path ?? $note.position.old_path
+      $line = $note.position.new_line ?? $note.position.old_line
+      "${file}:${line}"
     }
+    "discussion=$($thread.id) resolvable=$($note.resolvable) resolved=$($note.resolved) " +
+      "author=$($note.author.username) at=$where"
+    $note.body
+    ""
   }
+}
 
 # Compact summary of unresolved discussions
 glab mr view <iid> -F json --unresolved
 
-# Only discussions that still block the merge
-glab api "projects/:id/merge_requests/<iid>/discussions?per_page=100" | ConvertFrom-Json |
-  Where-Object { $_.notes | Where-Object { $_.resolvable -eq $true -and $_.resolved -eq $false } } |
+# Only discussions that still block the merge (all pages, as above)
+$threads | Where-Object { $_.notes | Where-Object { $_.resolvable -eq $true -and $_.resolved -eq $false } } |
   ForEach-Object { "open thread: $($_.id)" }
 ```
 
 A discussion id is the 40-character hex `id`. `position.new_path` / `new_line`
 point at the new side, `old_path` / `old_line` at the removed side. `system`
 notes are events like "changed the description"; they are not review remarks.
+General resolvable threads block a merge too: do not filter by `--type diff`
+when checking readiness. The API returns 100 discussions per page, so read every
+page instead of the first one.
 
 ## Answer and resolve
 

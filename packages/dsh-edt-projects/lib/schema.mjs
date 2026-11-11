@@ -191,13 +191,14 @@ function orderBySchema(value, defaults) {
 /**
  * Планирует обновление существующего конфига до текущей схемы.
  * Существующие значения не меняются, недостающие ключи добавляются.
- * @returns {{ config: object, added: string[], version: { from: number|undefined, to: number } }}
+ * @returns {{ config: object, added: string[], removed: string[], version: { from: number|undefined, to: number } }}
  */
 export function planUpgrade(existing) {
   const source = isPlainObject(existing) ? existing : {};
   const from = typeof source.version === 'number' ? source.version : undefined;
 
   const added = [];
+  const removed = [];
   const filled = fillMissing(source, DEFAULTS, '', added);
   if (from !== undefined && from < CONFIG_VERSION) {
     filled.version = CONFIG_VERSION;
@@ -212,6 +213,7 @@ export function planUpgrade(existing) {
         const path = `${key}.enabled`;
         const index = added.indexOf(path);
         if (index !== -1) added.splice(index, 1);
+        removed.push(path);
       }
     }
   }
@@ -219,6 +221,7 @@ export function planUpgrade(existing) {
   return {
     config: orderBySchema(filled, DEFAULTS),
     added,
+    removed,
     version: { from, to: CONFIG_VERSION },
   };
 }

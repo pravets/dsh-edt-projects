@@ -61,10 +61,18 @@ $projectKey = (Select-String -Path sonar-project.properties -Pattern '^sonar\.pr
 
   If the file is absent, use `sonar.projectKey` from the DSH settings file. If
   neither is set, search the server by a distinctive part of the project name
-  instead of guessing:
+  instead of guessing, and read every page until the exact match appears or the
+  pages run out:
 
 ```powershell
-sonar list projects -q "<part of the project name>" --page-size 20
+$query = "<part of the project name>"
+$found = @()
+for ($page = 1; ; $page++) {
+  $result = sonar list projects -q $query --page-size 50 --page $page | ConvertFrom-Json
+  $found += $result.projects
+  if ($result.paging.hasNextPage -ne $true) { break }
+}
+$found | ForEach-Object { "{0}  {1}" -f $_.key, $_.name }
 ```
 
   Pick the exact match and show it to the user; do not silently choose the first
@@ -113,9 +121,13 @@ asked for a severity filter; otherwise read everything and filter locally.
 MCP: `sonarqube_quality_gate`. CLI:
 
 ```powershell
+$branchParam = [uri]::EscapeDataString($branch)
 sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&pullRequest=<iid>"
-sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&branch=$branch"
+sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&branch=$branchParam"
 ```
+
+Branch names may contain `+`, `&` and `#`, so encode the branch before putting it
+into the endpoint.
 
 Read `projectStatus.status` and `projectStatus.conditions[]`
 (`metricKey`, `comparator`, `errorThreshold`, `actualValue`, `status`).

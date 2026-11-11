@@ -61,7 +61,25 @@ test('upgrade идемпотентен: второй прогон файл не 
   const second = upgradeFile(fileIn(dir));
   assert.equal(second.status, 'noop');
   assert.deepEqual(second.added, []);
+  assert.deepEqual(second.removed, []);
   assert.equal(statSync(fileIn(dir)).mtimeMs, mtime);
+});
+
+test('upgrade пишет файл, когда меняет только устаревшие флаги навыков', () => {
+  const dir = tempDir();
+  writeFileSync(fileIn(dir), '{"version":3,"gitlab":{"enabled":false},"sonar":{"enabled":false,"projectKey":""}}', 'utf8');
+
+  const dry = upgradeFile(fileIn(dir), { dryRun: true });
+  assert.equal(dry.status, 'dry-run');
+  assert.deepEqual(dry.removed.sort(), ['gitlab.enabled', 'sonar.enabled']);
+  assert.deepEqual(JSON.parse(readFileSync(fileIn(dir), 'utf8')).gitlab.enabled, false, 'dry-run не пишет');
+
+  const written = upgradeFile(fileIn(dir));
+  assert.equal(written.status, 'updated');
+  const file = JSON.parse(readFileSync(fileIn(dir), 'utf8'));
+  assert.equal(file.version, CONFIG_VERSION);
+  assert.equal(file.gitlab?.enabled, undefined);
+  assert.equal(file.sonar?.enabled, undefined);
 });
 
 test('upgrade сохраняет неизвестные ключи и предупреждает о них', () => {
@@ -308,6 +326,7 @@ test('sonar и gitlab: ключи в схеме, флаги не в дефолт
   assert.equal(migrated.config.gitlab.enabled, undefined);
   assert.equal(migrated.config.sonar.enabled, undefined);
   assert.equal(migrated.config.sonar.projectKey, '');
+  assert.deepEqual(migrated.removed, ['gitlab.enabled', 'sonar.enabled']);
 
   assert.deepEqual(validateConfig({ version: CONFIG_VERSION, gitlab: {}, sonar: {} }).warnings, []);
 });

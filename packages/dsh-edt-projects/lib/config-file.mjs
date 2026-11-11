@@ -48,18 +48,28 @@ export function initFile(path) {
 /**
  * Дописывает недостающие ключи. При `dryRun` файл не трогается.
  * @returns {{ status: 'updated'|'noop'|'error'|'dry-run', path: string,
- *             added: string[], warnings: string[], errors: string[], config?: object, error?: string }}
+ *             added: string[], removed: string[], warnings: string[], errors: string[], config?: object, error?: string }}
  */
 export function upgradeFile(path, { dryRun = false } = {}) {
   const existing = readExisting(path);
-  if (existing.error !== undefined) return { status: 'error', path, error: existing.error, added: [], warnings: [], errors: [] };
+  if (existing.error !== undefined) {
+    return { status: 'error', path, error: existing.error, added: [], removed: [], warnings: [], errors: [] };
+  }
 
   const base = existing.exists ? existing.config : {};
   const plan = planUpgrade(base);
   const { errors, warnings } = validateConfig(plan.config);
 
-  const result = { path, added: plan.added, warnings, errors, config: plan.config, version: plan.version };
-  if (plan.added.length === 0) return { status: 'noop', ...result };
+  const result = {
+    path,
+    added: plan.added,
+    removed: plan.removed,
+    warnings,
+    errors,
+    config: plan.config,
+    version: plan.version,
+  };
+  if (plan.added.length === 0 && plan.removed.length === 0) return { status: 'noop', ...result };
   if (dryRun) return { status: 'dry-run', ...result };
 
   writeAtomic(path, stringifyConfig(plan.config));

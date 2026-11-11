@@ -14,8 +14,15 @@ sonar auth status            # shorter form, same facts
 $projectKey = (Select-String -Path sonar-project.properties -Pattern '^sonar\.projectKey=(.+)$').Matches.Groups[1].Value.Trim()
 $projectKey
 
-# 3. Or search the server by name when the file is absent
-sonar list projects -q "<part of the project name>" --page-size 20
+# 3. Or search the server by name when the file is absent, all pages
+$query = "<part of the project name>"
+$found = @()
+for ($p = 1; ; $p++) {
+  $result = sonar list projects -q $query --page-size 50 --page $p | ConvertFrom-Json
+  $found += $result.projects
+  if ($result.paging.hasNextPage -ne $true) { break }
+}
+$found | ForEach-Object { "{0}  {1}" -f $_.key, $_.name }
 
 # 4. Issues of a merge request, compact form for reading
 $iid = <iid>
@@ -45,8 +52,9 @@ for ($p = 1; ; $p++) {
 # 8. Quality gate for a merge request
 sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&pullRequest=$iid"
 
-# 9. Quality gate for a branch
-sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&branch=$branch"
+# 9. Quality gate for a branch; encode the name because git allows +, & and #
+$branchParam = [uri]::EscapeDataString($branch)
+sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&branch=$branchParam"
 
 # 10. Gate conditions in readable form
 $gate = sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&pullRequest=$iid" | ConvertFrom-Json
