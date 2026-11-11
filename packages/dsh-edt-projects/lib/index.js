@@ -43,7 +43,7 @@ import { normalizeWiki, targetPathOf, writeDenialReason } from './wiki.mjs';
 import { normalizeTestTooling } from './tests.mjs';
 import { initFile, upgradeFile } from './config-file.mjs';
 import { stringifyConfig, validateConfig } from './schema.mjs';
-import { createSkillsProvider } from './skills.mjs';
+import { createSkillsProvider, skillStates } from './skills.mjs';
 import { repositoriesUnder, repositoryAt, resolveContextCwd } from './repo.mjs';
 import {
   BUILD_DIR,
@@ -366,6 +366,18 @@ const activationReason = (activation) => {
     default:
       return 'проект не выбран: нет .dsh-1c.json и его нет в projects';
   }
+};
+
+/** Причина включения навыка для `edt_config show`. */
+const skillReason = (reason) => {
+  if (typeof reason !== 'string') return 'нет флага и маркера репозитория';
+  if (reason === 'project-off') return 'проект выключен';
+  if (reason === 'flag') return 'флаг enabled: true';
+  if (reason === 'off') return 'флаг enabled: false';
+  if (reason === 'projectKey') return 'задан sonar.projectKey';
+  if (reason === 'server') return 'настроен сервер sonarqube';
+  if (reason.startsWith('marker:')) return `маркер ${reason.slice('marker:'.length)}`;
+  return 'нет флага и маркера репозитория';
 };
 
 /**
@@ -1303,9 +1315,18 @@ export async function apply(ctx, config) {
               : workspace.state === 'error'
                 ? `EDT-окружение worktree: ошибка — ${workspace.message}`
                 : 'EDT-окружение worktree: выключено (поднимается только в git worktree)';
+          const skillsLine = `Навыки: ${skillStates(effective.config, context.cwd)
+            .map((skill) => {
+              // Провайдер не отдаёт навыки в выключенном проекте, поэтому и
+              // диагностика не должна показывать их включёнными.
+              if (!activation.enabled) return `${skill.name.replace('edt-mcp-project-', '')} — выключен (${skillReason('project-off')})`;
+              return `${skill.name.replace('edt-mcp-project-', '')} — ${skill.enabled ? 'включён' : 'выключен'} (${skillReason(skill.reason)})`;
+            })
+            .join(', ')}`;
           const head = [
             `Проект: ${activation.enabled ? 'включён' : 'выключен'} — ${activationReason(activation)}`,
             dirsLine,
+            skillsLine,
             `Источники: ${effective.sources.length > 0 ? effective.sources.join(', ') : 'только cordis.patch.yml'}`,
             workspaceLine,
             `Действующие настройки:\n${stringifyConfig(effective.config)}`,
@@ -1333,8 +1354,12 @@ export async function apply(ctx, config) {
           if (result.status === 'error') throw new Error(`edt_config upgrade: ${result.error}`);
           if (result.status === 'noop') return { text: `${path}: актуален, добавлять нечего.` };
           if (!dryRun) invalidateSkills();
-          const lines = [`${path}: ${dryRun ? 'будет добавлено' : 'добавлено'} ${result.added.length} ключ(ей):`];
+          const removedText = result.removed.length > 0 ? `, убрано ${result.removed.length}` : '';
+          const lines = [
+            `${path}: ${dryRun ? 'предварительный просмотр' : 'обновлён'} — добавлено ${result.added.length}${removedText}`,
+          ];
           for (const key of result.added) lines.push(`  + ${key}`);
+          for (const key of result.removed) lines.push(`  - ${key} (прежнее значение по умолчанию, теперь навык включается по маркерам)`);
           if (dryRun) lines.push('Это был предварительный просмотр. Повторите с dryRun: false, чтобы записать.');
           for (const warning of result.warnings) lines.push(`  ! ${warning}`);
           for (const error of result.errors) lines.push(`  ✗ ${error}`);

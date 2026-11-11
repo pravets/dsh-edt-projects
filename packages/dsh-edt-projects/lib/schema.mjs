@@ -3,7 +3,7 @@
 //
 // Правила апгрейда: существующие значения не меняются, недостающие ключи
 // добавляются, неизвестные ключи сохраняются, версия поднимается.
-export const CONFIG_VERSION = 3;
+export const CONFIG_VERSION = 4;
 
 /** Значения по умолчанию для нового файла. Пустые строки и массивы
  *  нормализаторы игнорируют, поэтому init ничего не включает сам по себе.
@@ -42,8 +42,9 @@ export const DEFAULTS = {
     yaxunit: { enabled: false, path: '', project: '' },
     vanessa: { enabled: false, path: '' },
   },
-  sonar: { enabled: false, projectKey: '' },
-  gitlab: { enabled: false },
+  // `enabled` у навыков намеренно не входит в defaults: отсутствие ключа —
+  // это «включить по маркерам репозитория», и upgrade не должен его дописывать.
+  sonar: { projectKey: '' },
 };
 
 /** Известные ключи: путь -> описание и тип. Используются валидацией и README. */
@@ -109,9 +110,17 @@ export const KNOWN = {
   'tests.yaxunit.project': { type: 'string', description: 'EDT-проект, в который писать тесты.' },
   'tests.vanessa.enabled': { type: 'boolean', description: 'Включить правила сценарных тестов Vanessa.' },
   'tests.vanessa.path': { type: 'string', description: 'Каталог сценариев как образец стиля.' },
-  'sonar.enabled': { type: 'boolean', description: 'Включить навык SonarQube.' },
+  sonar: { type: 'object', description: 'Навык SonarQube: enabled и ключ проекта.' },
+  'sonar.enabled': {
+    type: 'boolean',
+    description: 'Включить навык SonarQube: не задан — авто по sonar-project.properties, projectKey или серверу sonarqube; true — принудительно вкл., false — принудительно выкл.',
+  },
   'sonar.projectKey': { type: 'string', description: 'Ключ проекта Sonar; пусто — берётся из sonar-project.properties.' },
-  'gitlab.enabled': { type: 'boolean', description: 'Включить навык GitLab (glab).' },
+  gitlab: { type: 'object', description: 'Навык GitLab (glab): enabled.' },
+  'gitlab.enabled': {
+    type: 'boolean',
+    description: 'Включить навык GitLab: не задан — авто по .gitlab-ci.yml и .gitlab/merge_request_templates; true — принудительно вкл., false — принудительно выкл.',
+  },
 };
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -182,22 +191,37 @@ function orderBySchema(value, defaults) {
 /**
  * Планирует обновление существующего конфига до текущей схемы.
  * Существующие значения не меняются, недостающие ключи добавляются.
- * @returns {{ config: object, added: string[], version: { from: number|undefined, to: number } }}
+ * @returns {{ config: object, added: string[], removed: string[], version: { from: number|undefined, to: number } }}
  */
 export function planUpgrade(existing) {
   const source = isPlainObject(existing) ? existing : {};
   const from = typeof source.version === 'number' ? source.version : undefined;
 
   const added = [];
+  const removed = [];
   const filled = fillMissing(source, DEFAULTS, '', added);
   if (from !== undefined && from < CONFIG_VERSION) {
     filled.version = CONFIG_VERSION;
     if (!added.includes('version')) added.push('version');
+    // До версии 4 init всегда писал `enabled: false` навыкам, поэтому false из
+    // старого файла — это прежнее «по умолчанию», а не осознанный выбор.
+    // Убираем ключ, чтобы навык включился по маркерам; явный false в файле
+    // версии 4 и новее сохраняется как есть.
+    for (const key of ['gitlab', 'sonar']) {
+      if (isPlainObject(filled[key]) && filled[key].enabled === false) {
+        delete filled[key].enabled;
+        const path = `${key}.enabled`;
+        const index = added.indexOf(path);
+        if (index !== -1) added.splice(index, 1);
+        removed.push(path);
+      }
+    }
   }
 
   return {
     config: orderBySchema(filled, DEFAULTS),
     added,
+    removed,
     version: { from, to: CONFIG_VERSION },
   };
 }

@@ -19,7 +19,7 @@ test('init создаёт файл со всеми ключами по умол�
 
   const written = JSON.parse(readFileSync(fileIn(dir), 'utf8'));
   assert.equal(written.version, CONFIG_VERSION);
-  assert.deepEqual(Object.keys(written).sort(), ['gitlab', 'projects', 'servers', 'sonar', 'tests', 'version', 'wiki', 'workspace']);
+  assert.deepEqual(Object.keys(written).sort(), ['projects', 'servers', 'sonar', 'tests', 'version', 'wiki', 'workspace']);
   assert.deepEqual(written.wiki.paths, []);
   assert.equal(written.tests.yaxunit.enabled, false);
   assert.equal(written.workspace.enabled, true);
@@ -61,7 +61,25 @@ test('upgrade идемпотентен: второй прогон файл не 
   const second = upgradeFile(fileIn(dir));
   assert.equal(second.status, 'noop');
   assert.deepEqual(second.added, []);
+  assert.deepEqual(second.removed, []);
   assert.equal(statSync(fileIn(dir)).mtimeMs, mtime);
+});
+
+test('upgrade пишет файл, когда меняет только устаревшие флаги навыков', () => {
+  const dir = tempDir();
+  writeFileSync(fileIn(dir), '{"version":3,"gitlab":{"enabled":false},"sonar":{"enabled":false,"projectKey":""}}', 'utf8');
+
+  const dry = upgradeFile(fileIn(dir), { dryRun: true });
+  assert.equal(dry.status, 'dry-run');
+  assert.deepEqual(dry.removed.sort(), ['gitlab.enabled', 'sonar.enabled']);
+  assert.deepEqual(JSON.parse(readFileSync(fileIn(dir), 'utf8')).gitlab.enabled, false, 'dry-run не пишет');
+
+  const written = upgradeFile(fileIn(dir));
+  assert.equal(written.status, 'updated');
+  const file = JSON.parse(readFileSync(fileIn(dir), 'utf8'));
+  assert.equal(file.version, CONFIG_VERSION);
+  assert.equal(file.gitlab?.enabled, undefined);
+  assert.equal(file.sonar?.enabled, undefined);
 });
 
 test('upgrade сохраняет неизвестные ключи и предупреждает о них', () => {
@@ -152,11 +170,11 @@ test('stringifyConfig: отступ 2 и перевод строки в конц
 
 test('порядок ключей стабилен: известные по схеме, затем прочие', () => {
   const plan = planUpgrade({ zzz: 1, tests: { vanessa: { enabled: true } }, wiki: { paths: ['a'] } });
-  assert.deepEqual(Object.keys(plan.config), ['version', 'projects', 'wiki', 'servers', 'workspace', 'tests', 'sonar', 'gitlab', 'zzz']);
+  assert.deepEqual(Object.keys(plan.config), ['version', 'projects', 'wiki', 'servers', 'workspace', 'tests', 'sonar', 'zzz']);
 });
 
 test('workspace: ключи в схеме, upgrade дописывает, import проверяется отдельно', () => {
-  assert.equal(CONFIG_VERSION, 3);
+  assert.equal(CONFIG_VERSION, 4);
   assert.deepEqual(DEFAULTS.workspace.ports, { min: 20000, max: 39999 });
   assert.equal(DEFAULTS.workspace.stopOnSessionEnd, true);
   for (const key of [
@@ -282,18 +300,33 @@ test('workspace: plainText/formScreenshots и ключи серверов из c
   assert.ok(plan.added.includes('workspace.formScreenshots'));
 });
 
-test('sonar и gitlab: ключи в схеме, дефолты выключены, upgrade их добавляет', () => {
-  assert.deepEqual(DEFAULTS.sonar, { enabled: false, projectKey: '' });
-  assert.deepEqual(DEFAULTS.gitlab, { enabled: false });
+test('sonar и gitlab: ключи в схеме, флаги не в дефолтах, upgrade их не добавляет', () => {
+  assert.deepEqual(DEFAULTS.sonar, { projectKey: '' });
+  assert.equal(DEFAULTS.gitlab, undefined);
+  assert.equal(isKnownPath('sonar'), true);
   assert.equal(isKnownPath('sonar.enabled'), true);
   assert.equal(isKnownPath('sonar.projectKey'), true);
+  assert.equal(isKnownPath('gitlab'), true);
   assert.equal(isKnownPath('gitlab.enabled'), true);
 
   const plan = planUpgrade({ version: CONFIG_VERSION });
-  assert.ok(plan.added.includes('sonar.enabled'));
-  assert.ok(plan.added.includes('gitlab.enabled'));
+  assert.ok(plan.added.includes('sonar.projectKey'));
+  assert.equal(plan.added.includes('sonar.enabled'), false);
+  assert.equal(plan.added.includes('gitlab.enabled'), false);
 
   const kept = planUpgrade({ version: CONFIG_VERSION, sonar: { enabled: true, projectKey: 'demo' } });
   assert.equal(kept.config.sonar.enabled, true);
   assert.equal(kept.config.sonar.projectKey, 'demo');
+
+  const explicitOff = planUpgrade({ version: CONFIG_VERSION, gitlab: { enabled: false } });
+  assert.equal(explicitOff.config.gitlab.enabled, false);
+  assert.equal(explicitOff.added.includes('gitlab.enabled'), false);
+
+  const migrated = planUpgrade({ version: 3, gitlab: { enabled: false }, sonar: { enabled: false, projectKey: '' } });
+  assert.equal(migrated.config.gitlab.enabled, undefined);
+  assert.equal(migrated.config.sonar.enabled, undefined);
+  assert.equal(migrated.config.sonar.projectKey, '');
+  assert.deepEqual(migrated.removed, ['gitlab.enabled', 'sonar.enabled']);
+
+  assert.deepEqual(validateConfig({ version: CONFIG_VERSION, gitlab: {}, sonar: {} }).warnings, []);
 });

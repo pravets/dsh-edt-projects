@@ -7,48 +7,64 @@ in variables.
 ```powershell
 # 1. Availability
 Get-Command sonar
-sonar auth status            # read the "Server" line; the exit code may be non-zero for other hosts
+sonar system status          # AUTHENTICATION: Server + Token: Active; may exit non-zero on a healthy install
+sonar auth status            # shorter form, same facts
 
 # 2. Project key from the repository
 $projectKey = (Select-String -Path sonar-project.properties -Pattern '^sonar\.projectKey=(.+)$').Matches.Groups[1].Value.Trim()
 $projectKey
 
-# 3. Issues of a merge request, current state only
+# 3. Or search the server by name when the file is absent, all pages
+$query = "<part of the project name>"
+$found = @()
+for ($p = 1; ; $p++) {
+  $result = sonar list projects -q $query --page-size 50 --page $p | ConvertFrom-Json
+  $found += $result.projects
+  if ($result.paging.hasNextPage -ne $true) { break }
+}
+$found | ForEach-Object { "{0}  {1}" -f $_.key, $_.name }
+
+# 4. Issues of a merge request, compact form for reading
 $iid = <iid>
+sonar list issues -p $projectKey --pull-request $iid --statuses OPEN,CONFIRMED --format toon --page-size 500 --page 1
+
+# 5. Same as JSON for parsing
 $page = sonar list issues -p $projectKey --pull-request $iid --statuses OPEN,CONFIRMED --format json --page-size 500 --page 1 | ConvertFrom-Json
-"total=$($page.total)"
+"total=$($page.total) page=$($page.p) pageSize=$($page.ps)"
 foreach ($issue in $page.issues) {
   $file = $issue.component -replace '^[^:]+:', ''
   "{0}:{1}  {2}  {3}  {4}" -f $file, $issue.line, $issue.rule, $issue.severity, $issue.message
 }
 
-# 4. Same for a branch
+# 6. Same for a branch
 $branch = '<branch>'
-sonar list issues -p $projectKey --branch $branch --statuses OPEN,CONFIRMED --format json --page-size 500 --page 1 | ConvertFrom-Json |
-  Select-Object -ExpandProperty issues |
-  ForEach-Object { "{0}:{1}  {2}  {3}" -f ($_.component -replace '^[^:]+:', ''), $_.line, $_.rule, $_.message }
+sonar list issues -p $projectKey --branch $branch --statuses OPEN,CONFIRMED --format toon --page-size 500 --page 1
 
-# 5. Read every page when the result is large
+# 7. Read every page when the result is large
 $all = @()
 for ($p = 1; ; $p++) {
   $chunk = sonar list issues -p $projectKey --pull-request $iid --statuses OPEN,CONFIRMED --format json --page-size 500 --page $p | ConvertFrom-Json
   $all += $chunk.issues
-  if ($all.Count -ge $chunk.total -or $chunk.issues.Count -eq 0) { break }
+  if ($all.Count -ge $chunk.paging.total -or $chunk.issues.Count -eq 0) { break }
 }
-"issues=$($all.Count)"
+"issues=$($all.Count) total=$($chunk.paging.total)"
 
-# 6. Quality gate for a merge request
+# 8. Quality gate for a merge request
 sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&pullRequest=$iid"
 
-# 7. Quality gate for a branch
-sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&branch=$branch"
+# 9. Quality gate for a branch; encode the name because git allows +, & and #
+$branchParam = [uri]::EscapeDataString($branch)
+sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&branch=$branchParam"
 
-# 8. Gate conditions in readable form
+# 10. Gate conditions in readable form
 $gate = sonar api GET "/api/qualitygates/project_status?projectKey=$projectKey&pullRequest=$iid" | ConvertFrom-Json
 "status=$($gate.projectStatus.status)"
 foreach ($c in $gate.projectStatus.conditions) {
   "{0} {1} {2} -> {3}" -f $c.metricKey, $c.comparator, $c.errorThreshold, $c.actualValue
 }
+
+# 11. Only discussions that block a merge request (different source, for contrast)
+#     Merge request remarks live in GitLab, not in Sonar; see the GitLab skill.
 ```
 
 ## Response shapes
@@ -66,6 +82,10 @@ foreach ($c in $gate.projectStatus.conditions) {
 - `status` values include `OPEN`, `CONFIRMED`, `FALSE_POSITIVE`, `ACCEPTED`,
   `FIXED`.
 
+`sonar list issues --format toon` prints the same data as compact YAML-like
+key/value blocks. It is easier to read but less convenient to parse; use JSON in
+scripts.
+
 `sonar api GET "/api/qualitygates/project_status..."`:
 
 ```
@@ -75,8 +95,14 @@ foreach ($c in $gate.projectStatus.conditions) {
 ## Notes
 
 - `--format` also accepts `table` and `csv` for reading by eye; `json` is for
-  parsing.
+  parsing, `toon` is the compact one for reading in an agent session.
 - `--severities` values depend on the server mode; when unsure, read without the
   filter and rank locally.
+- `sonar api` takes the method first and the endpoint second; the endpoint must
+  start with `/`. Use `--data '<json>'` for a request body.
+- `sonar system status` may exit non-zero on a healthy installation — read the
+  output instead of the exit code.
 - PowerShell may print progress to stderr; judge by output, not by a non-zero
   exit code alone.
+- Sonar issues are not merge request discussions: `glab mr note list` never shows
+  them and `sonar list issues` never shows review threads.

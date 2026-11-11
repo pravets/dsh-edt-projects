@@ -40,9 +40,11 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
   (`edt_pin`), настройки на проект, правила для системного промпта, провайдер
   навыков; `repo.mjs`/`workspace.mjs`/`workspace-run.mjs` — определение worktree,
   подъём и остановка EDT-окружения в `build/`.
-- `skills/` — навыки `edt-mcp-project-sonar` и `edt-mcp-project-gitlab`,
-  включаются флагами `sonar.enabled` и `gitlab.enabled` внутри включённого
-  проекта.
+- `skills/` — навыки `edt-mcp-project-sonar` и `edt-mcp-project-gitlab`:
+  оформление MR и замечания ревью через `glab`, замечания Sonar и гейт через
+  `sonar`. Внутри включённого проекта включаются сами по маркерам репозитория
+  (`.gitlab-ci.yml`, `sonar-project.properties`); ключ `enabled` в конфиге
+  сильнее: `true`/`false` принудительно включает и выключает.
 - `cordis.patch.yml` — состав серверов, который применяет менеджер плагинов:
   EDT, BSL Language Server по требованию, MCP-трекер и `v8std` (стандарты 1С и
   расшифровка диагностик EDT/BSL).

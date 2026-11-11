@@ -61,15 +61,18 @@ if (has('--print')) {
   process.exit(0);
 }
 
-if (result.added.length === 0) {
+const changed = result.added.length + (result.removed?.length ?? 0);
+if (changed === 0) {
   console.log(`${path}: актуален, добавлять нечего.`);
 } else if (result.status === 'dry-run') {
-  console.log(`${path}: будет добавлено ${result.added.length} ключ(ей):`);
+  console.log(`${path}: будет изменено: добавлено ${result.added.length}, убрано ${result.removed?.length ?? 0}`);
   for (const key of result.added) console.log(`  + ${key}`);
+  for (const key of result.removed ?? []) console.log(`  - ${key}`);
   console.log('(dry-run: файл не изменён)');
 } else if (result.status === 'updated') {
-  console.log(`${path}: обновлён, добавлено ${result.added.length} ключ(ей):`);
+  console.log(`${path}: обновлён, добавлено ${result.added.length}, убрано ${result.removed?.length ?? 0}`);
   for (const key of result.added) console.log(`  + ${key}`);
+  for (const key of result.removed ?? []) console.log(`  - ${key}`);
 } else {
   console.error(`ОШИБКА: ${result.error ?? result.status}`);
   process.exit(1);

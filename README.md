@@ -42,7 +42,7 @@
 - **Правила для модели.** «Исходники 1С правим только инструментами EDT», точечная
   диагностика через BSL, изменения состояния проекта — только по явной просьбе.
 - **Навыки SonarQube и GitLab** и правила тестируемости (YAxUnit, Vanessa) —
-  включаются флагами в конфиге включённого проекта.
+  навыки включаются сами по маркерам репозитория, флаг в конфиге сильнее.
 
 ## Требования
 
@@ -73,7 +73,7 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 | Способ | Что передать |
 |---|---|
 | локальные исходники | `install_bundle` с путём `C:\git\dsh-edt-plugin\packages\dsh-edt-projects` (создаёт `link:`, правки видны после пересборки профиля) |
-| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.12.1/dsh-edt-projects-0.12.1.tgz` |
+| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.13.0/dsh-edt-projects-0.13.0.tgz` |
 | Web UI | Plugins → Add plugin → тот же путь или URL |
 
 ## Где включается
@@ -168,8 +168,9 @@ space у `dsh-worktree-space`) и проверяет `enabled`, `projects` и `.
 | `workspace.plainText` | Plain text mode вместо embedded resource (DSH их не рендерит) | `true` |
 | `workspace.formScreenshots` | включить `get_form_screenshot` и JVM-флаг `nativeFormBufferedLayoutRender` | `true` |
 | `tests.yaxunit` / `tests.vanessa` | правила тестируемости | выключены |
-| `sonar.enabled` / `sonar.projectKey` | навык SonarQube | выключен |
-| `gitlab.enabled` | навык GitLab | выключен |
+| `sonar.enabled` | навык SonarQube: не задан — авто по `sonar-project.properties`, `sonar.projectKey` или серверу `sonarqube`; `true`/`false` — принудительно | авто |
+| `sonar.projectKey` | ключ проекта для навыка Sonar | из `sonar-project.properties` |
+| `gitlab.enabled` | навык GitLab: не задан — авто по `.gitlab-ci.yml` и `.gitlab/merge_request_templates`; `true`/`false` — принудительно | авто |
 
 `servers.*.shared` больше не работает: сервер всегда монтируется в скоупе
 сессии. Полный список ключей, включая `servers.bsl.java`, `cwd`, `port` и
@@ -447,16 +448,39 @@ MCP-эндпоинтом `https://ai.v8std.ru/mcp` (страница `v8std.ru/m
 - `vanessa` — если юнитов мало (интеграция, обмен, интерфейс, печатные формы),
   предлагать 2–3 сценария с шагами и ожидаемым результатом, не создавая их молча.
 
-Навыки появляются в каталоге только во включённом проекте и при включённом флаге;
-они приходят из пакета, так что проектный навык с тем же именем их переопределяет:
+Навыки появляются в каталоге только во включённом проекте; они приходят из пакета,
+так что проектный навык с тем же именем их переопределяет. Включение трёхзначное:
+ключ не задан — навык включается по маркеру репозитория, `true`/`false` — сильнее
+маркера:
 
 ```json
-{ "sonar": { "enabled": true }, "gitlab": { "enabled": true } }
+{ "sonar": { "enabled": true }, "gitlab": { "enabled": false } }
 ```
 
+При `edt_config upgrade` файл версии 3 и старше теряет прежний `enabled: false`
+(это было значение по умолчанию, а не выбор) и навык переходит в авто-режим;
+явный `false` в файле версии 4 остаётся запретом.
+
+- `edt-mcp-project-gitlab` — включается сам, если в репозитории есть
+  `.gitlab-ci.yml` или `.gitlab/merge_request_templates/`. Отвечает на вопросы:
+  как оформить MR (сначала `AGENTS.md` и шаблон репозитория, иначе Summary /
+  Evidence / Merge Danger), как создать его без интерактивных вопросов, какие
+  замечания ревью висят неразрешёнными, как ответить в тред, как резолвнуть его
+  после правки, как прочитать пайплайн и почему упал job. Мерж — только по
+  отдельной явной просьбе пользователя; зелёный пайплайн и одобрение ревьюеров
+  разрешением не считаются.
+- `edt-mcp-project-sonar` — включается сам, если есть `sonar-project.properties`,
+  задан `sonar.projectKey` или настроен сервер `sonarqube`. Отвечает за замечания
+  Sonar (`--statuses OPEN,CONFIRMED`, компактный `--format toon` для чтения и
+  `json` для разбора), качественный гейт, поиск ключа проекта через
+  `sonar list projects` и цикл правки через EDT-MCP. Замечания Sonar и треды
+  ревью — разные источники, навык не смешивает их.
+
 Адреса и ключи в текстах навыков не зашиты: сервер Sonar, ключ проекта, GitLab-хост
-и `glab`-авторизация определяются в момент работы. Мерж, force-push и пуш в основную
-ветку запрещены текстом навыка.
+и `glab`-авторизация определяются в момент работы. Мерж без явного запроса,
+force-push, пуш в основную ветку и резолв неразобранных тредов запрещены текстом
+навыка. `edt_config action=show` печатает строку «Навыки» с причиной включения
+(флаг, маркер или «нет флага и маркера»).
 
 ## Правила для модели
 
@@ -490,6 +514,7 @@ MCP-эндпоинтом `https://ai.v8std.ru/mcp` (страница `v8std.ru/m
 | EDT падает сразу после старта, `failed` за секунды | проверить `status` → «Java … (EDT требует N)»; задать `workspace.vm` на `jdk-full-<N>` или убрать `-vm` |
 | импорт в worktree завис/упал | прогресс и хвост — в `build/ws/.metadata/.log` (он же digest в `build/logs/edt-import.log`); повторить `edt_workspace action=init`, при необходимости `restart` с `import: true` |
 | `get_form_screenshot` нет в `tools/list` | `workspace.formScreenshots` должен быть `true`; после `restart` проверить prefs `mcpDisabledTools` и флаг `-DnativeFormBufferedLayoutRender=true` |
+| навыка GitLab или Sonar нет в каталоге | `edt_config action=show` → строка «Навыки» и причина; включить `"gitlab": { "enabled": true }` / `"sonar": { "enabled": true }` или добавить маркер репозитория (`.gitlab-ci.yml`, `sonar-project.properties`) |
 | после переименования каталога плагина ошибки про старый путь | переустановить плагин: `remove_bundle`, затем `install_bundle` |
 
 Живая проверка без DSH: `npm run check:edt` — печатает версию сервера, число
@@ -506,7 +531,7 @@ tools/                       проверки, тесты, smoke, заглушк
 ```text
 npm ci               # зависимости проверок
 npm run validate     # манифест, патч, локали, иконка, готовность к публикации, порт
-npm test             # 201 проверка: правила, BSL, конфиг, включение, worktree, окружение, вики, схема, навыки, cwd
+npm test             # 214 проверок: правила, BSL, конфиг, включение, worktree, окружение, вики, схема, навыки, cwd
 npm run pack:check   # состав tarball
 npm run check:edt    # живой MCP-сервер EDT
 npm run smoke        # прогон бандла в одноразовом профиле DSH
@@ -528,7 +553,7 @@ EDT — задайте `SMOKE_PORT`.
 
 ## Версионирование
 
-Проект в статусе беты и версионируется как **0.x** (текущая — `v0.12.1`). Между 0.x
+Проект в статусе беты и версионируется как **0.x** (текущая — `v0.13.0`). Между 0.x
 без миграции могут меняться ключи конфига, имена инструментов и структура
 `cordis.patch.yml`; `edt_config upgrade` дополняет файл, но совместимость не
 гарантирует. Версия 1.0.0 будет означать зафиксированный API. История — в
