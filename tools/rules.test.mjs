@@ -184,7 +184,7 @@ test('mountConfig не оставляет undefined-поля', () => {
   assert.deepEqual(Object.keys(config).sort(), ['serverName', 'transport', 'url']);
 });
 
-test('окружение worktree: блок про build/ws и edt_workspace', () => {
+test('окружение worktree: блок про имя workspace и edt_workspace', () => {
   const workspace = {
     state: 'worktree',
     status: 'ready',

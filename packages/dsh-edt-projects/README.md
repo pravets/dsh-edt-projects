@@ -12,7 +12,7 @@ SonarQube/GitLab.
 включается.
 
 В **linked git worktree** плагин поднимает отдельное окружение EDT
-(`<worktree>/build/ws`, свой порт и логи), импортирует проекты и монтирует
+(`<worktree>/build/<ветка>`, свой порт и логи; имя каталога видно в заголовке окна EDT), импортирует проекты и монтирует
 `mcp__edt__*` туда; включённость и настройки наследуются от основного checkout.
 Работает совместно с [dsh-git-worktree](https://github.com/LaoYueHanNi/dsh-git-worktree)
 (`<repo>/.dsh/gitworktree/<branch>/`), `build/` не требует ручной настройки.

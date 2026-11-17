@@ -64,6 +64,9 @@ function fixture({ enabledFile } = {}) {
   mkdirSync(join(worktree, 'src', 'cf'), { recursive: true });
   writeFileSync(join(worktree, 'src', 'cf', '.project'), '', 'utf8');
   writeFileSync(join(worktree, '.git'), `gitdir: ${gitDir.replace(/\\/g, '/')}\n`, 'utf8');
+  // Снимок окружения: имя каталога workspace взято из ветки.
+  mkdirSync(join(worktree, 'build'), { recursive: true });
+  writeFileSync(join(worktree, 'build', 'workspace.json'), JSON.stringify({ wsDir: join(worktree, 'build', 'feature-2520') }), 'utf8');
   if (enabledFile !== undefined) writeFileSync(join(main, '.dsh-1c.json'), JSON.stringify(enabledFile), 'utf8');
   return { dir, main, worktree };
 }
@@ -83,7 +86,7 @@ test('worktree: промпт включает правила 1С и блок о�
     const text = section.text({ agent: agentIn(worktree) });
     assert.match(text, /Работа с 1С через MCP/);
     assert.match(text, /### Окружение EDT в worktree/);
-    assert.match(text, /build[\\/]ws/);
+    assert.match(text, /build[\\/]feature-2520/);
     assert.match(text, /edt_workspace/);
 
     // Основной checkout имя проекта наследует, но окружение там не поднимается.
@@ -104,7 +107,7 @@ test('worktree: эффективный каталог сессии главне�
     await apply(ctx, {});
     const text = sections.get('mcp-rules:1c').text({ agent: agentIn(main) });
     assert.match(text, /### Окружение EDT в worktree/);
-    assert.match(text, /build[\\/]ws/);
+    assert.match(text, /build[\\/]feature-2520/);
 
     const configTool = tools.find((definition) => definition.name === 'edt_config');
     assert.ok(configTool, 'edt_config зарегистрирован');

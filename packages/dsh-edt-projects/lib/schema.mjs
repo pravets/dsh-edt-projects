@@ -3,7 +3,7 @@
 //
 // Правила апгрейда: существующие значения не меняются, недостающие ключи
 // добавляются, неизвестные ключи сохраняются, версия поднимается.
-export const CONFIG_VERSION = 4;
+export const CONFIG_VERSION = 5;
 
 /** Значения по умолчанию для нового файла. Пустые строки и массивы
  *  нормализаторы игнорируют, поэтому init ничего не включает сам по себе.
@@ -18,11 +18,13 @@ export const DEFAULTS = {
     bsl: { root: '' },
     tasks: { url: '' },
   },
-  // Окружение EDT для git worktree: workspace в <worktree>/build/ws и свой
-  // MCP-сервер на своём порту. Поднимается только в linked worktree.
+  // Окружение EDT для git worktree: workspace в <worktree>/build/<ветка> и
+  // свой MCP-сервер на своём порту. Поднимается только в linked worktree.
   workspace: {
     enabled: true,
     root: '',
+    // Имя каталога workspace и строки в заголовке окна 1C:EDT; пусто — ветка.
+    name: '',
     home: { win32: '', linux: '' },
     vm: '',
     xmxIde: '6g',
@@ -86,9 +88,13 @@ export const KNOWN = {
   'servers.bsl.mode': { type: 'string', description: 'hybrid (LSP+MCP) или stdio.' },
   'servers.bsl.mcpUrl': { type: 'string', description: 'Адрес уже запущенного BSL LS по HTTP.' },
   'servers.bsl.download': { type: 'boolean', description: 'Разрешено ли скачивание jar.' },
-  'workspace': { type: 'object', description: 'Окружение EDT для git worktree: workspace в <worktree>/build/ws и свой MCP-порт.' },
+  'workspace': { type: 'object', description: 'Окружение EDT для git worktree: workspace в <worktree>/build/<ветка> и свой MCP-порт.' },
   'workspace.enabled': { type: 'boolean', description: 'Поднимать ли EDT-окружение в worktree автоматически.' },
   'workspace.root': { type: 'string', description: 'Корень окружения относительно корня worktree; пусто — сам worktree.' },
+  'workspace.name': {
+    type: 'string',
+    description: 'Имя каталога workspace внутри build и строки в заголовке окна 1C:EDT; пусто — имя ветки worktree, небезопасные символы заменяются на -',
+  },
   'workspace.home': { type: 'object', description: 'Каталог установки 1C:EDT по платформам.' },
   'workspace.home.win32': { type: 'string', description: 'Каталог 1C:EDT в Windows (где 1cedt.exe).' },
   'workspace.home.linux': { type: 'string', description: 'Каталог 1C:EDT в Linux (где 1cedt).' },
@@ -276,6 +282,9 @@ export function validateConfig(config) {
     if (workspace.projects !== undefined) {
       if (!Array.isArray(workspace.projects)) errors.push('workspace.projects: ожидался массив шаблонов');
       else if (!workspace.projects.every((item) => typeof item === 'string')) errors.push('workspace.projects: ожидался массив строк');
+    }
+    if (workspace.name !== undefined && typeof workspace.name !== 'string') {
+      errors.push('workspace.name: ожидалась строка');
     }
     for (const key of ['importTimeout', 'startTimeout']) {
       const value = workspace[key];
