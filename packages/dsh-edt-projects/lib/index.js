@@ -926,9 +926,11 @@ export async function apply(ctx, config) {
         // такой запуск тоже запрещает переезд каталога.
         if (busyLaunching(live, plan.settings) || runLockActive(key, plan.settings, { alive: cheapAlive })) return live;
         const running = live.pid?.pid !== undefined && cheapAlive(live.pid.pid);
-        const moved = migrateWorkspaceDir({ buildDir: key, name: wsName, running });
+        const moved = migrateWorkspaceDir({ buildDir: key, name: wsName, current: plan.wsDir, running });
         if (moved.migrated) {
           ctx.logger?.info?.(`mcp-hub: workspace EDT перенесён в ${moved.wsDir}`);
+        } else if (moved.blocked === 'exists') {
+          ctx.logger?.warn?.(`mcp-hub: каталог ${moved.wsDir} уже существует — workspace остаётся на нём`);
         } else if (moved.blocked === 'error') {
           ctx.logger?.warn?.(`mcp-hub: не удалось перенести workspace EDT: ${moved.error?.message ?? moved.error}`);
         }

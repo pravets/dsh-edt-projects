@@ -280,15 +280,16 @@ function snapshotOrThrow(root) {
 }
 
 /** Снимок по умолчанию для CLI, когда workspace.json ещё нет. */
-export function defaultSnapshot(root, env = process.env, deps = {}) {
+export function defaultSnapshot(root, env = process.env) {
   const settings = normalizeWorkspaceSettings({}, env);
   const buildDir = path.join(root, 'build');
-  const branch = (deps.currentBranch ?? currentBranch)(root, { run: deps.run });
-  const name = workspaceDirName({ root, settings, branch });
+  // Имя по ветке требует git, поэтому здесь только фактический каталог: план
+  // покажет старое build/ws, а переезд в build/<ветка> сделает cmdInit.
+  const dirs = planWorkspaceDirs({ root, settings, snapshot: undefined });
   return buildWorkspaceSnapshot({
     root,
     buildDir,
-    wsDir: path.join(buildDir, name),
+    wsDir: dirs.wsDir,
     mainRoot: undefined,
     settings,
     projects: discoverProjects(root, settings.projects),
@@ -300,7 +301,7 @@ export function defaultSnapshot(root, env = process.env, deps = {}) {
  * @returns {Promise<number>} код возврата.
  */
 export async function cmdInit(root, args = {}, deps = {}) {
-  let snapshot = deps.snapshot ?? readWorkspaceSnapshot(path.join(root, 'build')) ?? defaultSnapshot(root, process.env, deps);
+  let snapshot = deps.snapshot ?? readWorkspaceSnapshot(path.join(root, 'build')) ?? defaultSnapshot(root);
   const buildDir = snapshot.buildDir;
   mkdirSync(buildDir, { recursive: true });
 
@@ -337,6 +338,7 @@ export async function cmdInit(root, args = {}, deps = {}) {
       const moved = migrateWorkspaceDir({
         buildDir,
         name,
+        current: snapshot.wsDir,
         running: runningPid !== undefined && alive(runningPid),
       });
       // Снимок всегда описывает фактический каталог: при отказе от переезда
@@ -346,6 +348,8 @@ export async function cmdInit(root, args = {}, deps = {}) {
         logTo(buildDir, `init: workspace перенесён в ${path.basename(moved.wsDir)}`);
       } else if (moved.blocked === 'running') {
         logTo(buildDir, 'init: EDT запущен — workspace остаётся на старом месте');
+      } else if (moved.blocked === 'exists') {
+        logTo(buildDir, `init: каталог ${path.basename(moved.wsDir)} уже существует — остаюсь на нём`);
       } else if (moved.blocked === 'error') {
         logTo(buildDir, `init: не удалось переименовать workspace (${moved.error?.message ?? moved.error}) — продолжаю на старом месте`);
       }

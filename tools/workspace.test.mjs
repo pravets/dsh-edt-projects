@@ -673,6 +673,12 @@ test('planWorkspaceDirs: снимок главнее, legacy и явное им�
       snapshot: { wsDir: join(buildDir, 'ws') },
     });
     assert.equal(plan.legacy, true, 'снимок показывает старое место');
+
+    // Явное имя, старое окружение и ещё нет снимка: план показывает фактическое
+    // место, переезд в build/task-42 сделает старт.
+    plan = planWorkspaceDirs({ root, settings: normalizeWorkspaceSettings({ name: 'task 42' }) });
+    assert.equal(plan.wsDir, join(buildDir, 'ws'));
+    assert.equal(plan.legacy, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -37,7 +37,8 @@
   считаются от фактического каталога workspace, а не от фиксированного
   `build/ws`.
 - Имя каталога фиксируется в `build/workspace.json` при создании окружения:
-  смена ветки внутри существующего worktree требует `edt_workspace action=restart`.
+  смена ветки внутри существующего worktree подхватывается при следующем старте
+  (`edt_workspace action=restart`) — каталог переезжает под новое имя.
 - Схема настроек поднята до версии 5: `edt_config action=upgrade` добавляет
   `workspace.name: ""` и поднимает `version`.
 

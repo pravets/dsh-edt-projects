@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 
 import {
   normalizeWorkspaceSettings,
@@ -67,19 +67,15 @@ test('parseArgs: действие, флаги и значения', () => {
   assert.equal(parseArgs(['run']).import, undefined);
 });
 
-test('defaultSnapshot: настройки по умолчанию, имя по ветке и найденные проекты', () => {
+test('defaultSnapshot: настройки по умолчанию, каталог из файлов и найденные проекты', () => {
   const root = tempRoot();
   try {
     const cf = projectDir(root, 'src/cf');
-    const snapshot = defaultSnapshot(root, {}, { currentBranch: () => 'feature/2520' });
+    const snapshot = defaultSnapshot(root, {});
     assert.equal(snapshot.buildDir, join(root, 'build'));
-    assert.equal(snapshot.wsDir, join(root, 'build', 'feature-2520'));
+    assert.equal(snapshot.wsDir, join(root, 'build', 'ws'), 'без снимка и старого каталога — старое место');
     assert.deepEqual(snapshot.projects, [cf]);
     assert.equal(snapshot.settings.import, 'auto');
-
-    // Без ветки (detached HEAD, нет git) имя берётся из каталога worktree.
-    const fallback = defaultSnapshot(root, {}, { currentBranch: () => undefined });
-    assert.equal(fallback.wsDir, join(root, 'build', basename(root)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -221,8 +221,10 @@ export function planWorkspaceDirs({ root, settings, snapshot } = {}) {
   }
 
   const legacyDir = path.join(buildDir, LEGACY_WS_NAME);
-  if (configured === '' && existsSync(legacyDir)) {
-    return { buildDir, wsName: LEGACY_WS_NAME, wsDir: legacyDir, legacy: true };
+  if (existsSync(legacyDir)) {
+    // Окружение уже есть в старом месте — переезд произойдёт при старте,
+    // поэтому план (и статус) показывает фактический каталог.
+    return { buildDir, wsName: LEGACY_WS_NAME, wsDir: legacyDir, legacy: configured !== LEGACY_WS_NAME };
   }
   const wsName = configured === '' ? LEGACY_WS_NAME : configured;
   return { buildDir, wsName, wsDir: path.join(buildDir, wsName), legacy: false };
@@ -236,18 +238,25 @@ export function planWorkspaceDirs({ root, settings, snapshot } = {}) {
  * чтобы подъём не сломался.
  * @returns {{ wsDir: string, migrated: boolean, blocked?: 'running'|'error', error?: Error }}
  */
-export function migrateWorkspaceDir({ buildDir, name, running = false } = {}) {
+export function migrateWorkspaceDir({ buildDir, name, current, running = false } = {}) {
   const target = sanitizeWorkspaceName(name) || LEGACY_WS_NAME;
-  const legacy = path.join(buildDir, LEGACY_WS_NAME);
   const desired = path.join(buildDir, target);
-  if (target === LEGACY_WS_NAME) return { wsDir: legacy, migrated: false };
-  if (!existsSync(legacy) || existsSync(desired)) return { wsDir: desired, migrated: false };
-  if (running === true) return { wsDir: legacy, migrated: false, blocked: 'running' };
+  const saved = text(current);
+  const currentDir =
+    saved === undefined
+      ? path.join(buildDir, LEGACY_WS_NAME)
+      : path.isAbsolute(saved)
+        ? path.normalize(saved)
+        : path.resolve(buildDir, saved);
+  if (path.basename(currentDir) === target) return { wsDir: currentDir, migrated: false };
+  if (!existsSync(currentDir)) return { wsDir: desired, migrated: false };
+  if (existsSync(desired)) return { wsDir: desired, migrated: false, blocked: 'exists' };
+  if (running === true) return { wsDir: currentDir, migrated: false, blocked: 'running' };
   try {
-    renameSync(legacy, desired);
+    renameSync(currentDir, desired);
     return { wsDir: desired, migrated: true };
   } catch (error) {
-    return { wsDir: legacy, migrated: false, blocked: 'error', error };
+    return { wsDir: currentDir, migrated: false, blocked: 'error', error };
   }
 }
 
