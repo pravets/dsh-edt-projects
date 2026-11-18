@@ -27,6 +27,7 @@ import {
   defaultSnapshot,
   parseArgs,
   shouldImport,
+  runLockActive,
   statusReport,
   waitHealth,
   waitReady,
@@ -710,6 +711,27 @@ test('cmdInit (CLI): активный run-lock блокирует перенос
     assert.equal(code, 4, 'импорт уже идёт');
     assert.equal(existsSync(legacy), true, 'каталог работает — не переименовываем');
     assert.equal(existsSync(join(buildDir, 'feature-2520')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runLockActive: живой run-lock считается запуском, мёртвый и просроченный — нет', () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    mkdirSync(buildDir, { recursive: true });
+    const lock = join(buildDir, 'init-run.lock');
+    const now = new Date().toISOString();
+
+    writeFileSync(lock, JSON.stringify({ pid: 4242, at: now }), 'utf8');
+    assert.equal(runLockActive(buildDir, {}, { alive: () => true }), true);
+    assert.equal(runLockActive(buildDir, {}, { alive: () => false }), false, 'мёртвый pid — lock осиротел');
+    writeFileSync(lock, JSON.stringify({ pid: 4242, at: new Date(Date.now() - 3 * 24 * 3600_000).toISOString() }), 'utf8');
+    assert.equal(runLockActive(buildDir, {}, { alive: () => true }), false, 'просроченный lock не держит');
+
+    rmSync(lock, { force: true });
+    assert.equal(runLockActive(buildDir, {}, { alive: () => true }), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

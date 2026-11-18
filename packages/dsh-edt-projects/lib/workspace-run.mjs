@@ -165,6 +165,13 @@ export function lockState(file, deps = {}) {
   };
 }
 
+/** Идёт ли подъём/импорт в фоне (`init-run.lock` жив и не просрочен). */
+export function runLockActive(buildDir, settings = {}, deps = {}) {
+  const maxAgeMs = (Math.max(settings?.startTimeout ?? 1800, settings?.importTimeout ?? 3600) + 600) * 1000;
+  const lock = lockState(filePath(buildDir, 'runLock'), { ...deps, maxAgeMs });
+  return lock.exists === true && lock.stale !== true;
+}
+
 /**
  * Захватывает lock. Чужой lock считается stale, если pid не жив, образ не
  * совпадает (`image`) или возраст больше `maxAgeMs`; stale перехватывается.

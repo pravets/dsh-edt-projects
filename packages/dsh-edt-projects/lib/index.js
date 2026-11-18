@@ -72,7 +72,7 @@ import {
   writePort,
   writeStamp,
 } from './workspace.mjs';
-import { cmdInit, cmdStop as stopWorkspaceNow, lockState } from './workspace-run.mjs';
+import { cmdInit, cmdStop as stopWorkspaceNow, lockState, runLockActive } from './workspace-run.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -922,6 +922,9 @@ export async function apply(ctx, config) {
         // Состояние перечитываем перед переносом: между чтением в начале и
         // этим местом были await-ы (порт, health), и EDT мог успеть подняться.
         const live = workspaceState(key, { alive: cheapAlive });
+        // Импорт в другом процессе ещё не пишет pid GUI, но держит run-lock:
+        // такой запуск тоже запрещает переезд каталога.
+        if (busyLaunching(live, plan.settings) || runLockActive(key, plan.settings, { alive: cheapAlive })) return live;
         const running = live.pid?.pid !== undefined && cheapAlive(live.pid.pid);
         const moved = migrateWorkspaceDir({ buildDir: key, name: wsName, running });
         if (moved.migrated) {
