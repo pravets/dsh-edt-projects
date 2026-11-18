@@ -919,7 +919,10 @@ export async function apply(ctx, config) {
         // только когда EDT не запущен: работающий Eclipse держит файлы.
         const branch = currentBranch(plan.root);
         const wsName = workspaceDirName({ root: plan.root, settings: plan.settings, branch });
-        const running = current.pid?.pid !== undefined && cheapAlive(current.pid.pid);
+        // Состояние перечитываем перед переносом: между чтением в начале и
+        // этим местом были await-ы (порт, health), и EDT мог успеть подняться.
+        const live = workspaceState(key, { alive: cheapAlive });
+        const running = live.pid?.pid !== undefined && cheapAlive(live.pid.pid);
         const moved = migrateWorkspaceDir({ buildDir: key, name: wsName, running });
         if (moved.migrated) {
           ctx.logger?.info?.(`mcp-hub: workspace EDT перенесён в ${moved.wsDir}`);

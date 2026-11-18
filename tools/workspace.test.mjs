@@ -560,7 +560,7 @@ test('readFromOffset и importDigest читают только новые стр
     assert.equal(first.offset, statSync(log).size);
 
     writeFileSync(log, `${readFileSync(log, 'utf8')}!MESSAGE Project context is started: cf\n`, 'utf8');
-    const digest = importDigest(buildDir, first.offset, 19);
+    const digest = importDigest(join(buildDir, 'ws'), first.offset, 19);
     assert.equal(digest.startedCount, 1);
     assert.equal(digest.current, 'cf');
     assert.ok(digest.lines.some((line) => line.includes('Project context is started')));

@@ -655,8 +655,12 @@ export function readImported(buildDir) {
   return readJson(filePath(buildDir, 'imported')) ?? null;
 }
 
-export function writeImported(buildDir, projects, now = new Date()) {
-  atomicWrite(filePath(buildDir, 'imported'), JSON.stringify({ projects, at: now.toISOString() }));
+export function writeImported(buildDir, projects, { wsDir, now = new Date() } = {}) {
+  // Каталог workspace входит в маркер: после переезда в build/<ветка> старый
+  // маркер не должен убеждать, что проекты уже импортированы.
+  const marker = { projects, at: now.toISOString() };
+  if (typeof wsDir === 'string' && wsDir !== '') marker.wsDir = wsDir;
+  atomicWrite(filePath(buildDir, 'imported'), JSON.stringify(marker));
 }
 
 /** Прогресс подъёма: `{ startedAt, edt: { phase, since, updated, detail } }`. */
@@ -767,8 +771,8 @@ export function parseImportProgress(text, total = 0) {
 }
 
 /** Свежий кусок metadata-лога, прогресс импорта и полезные строки. */
-export function importDigest(buildDir, offset, total, deps = {}) {
-  const file = path.join(buildDir, 'ws', '.metadata', '.log');
+export function importDigest(wsDir, offset, total, deps = {}) {
+  const file = path.join(wsDir, '.metadata', '.log');
   const { text, offset: next } = (deps.readFromOffset ?? readFromOffset)(file, offset);
   const progress = parseImportProgress(text, total);
   const lines = text

@@ -385,6 +385,7 @@ test('shouldImport: режимы true/false/auto и смена списка пр
 
     writeImported(buildDir, ['a', 'b']);
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: 'auto' }) }), false, 'маркер совпадает');
+
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: true }) }), false, 'список не изменился');
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: true }) }, { force: true }), true);
     assert.equal(
@@ -398,6 +399,21 @@ test('shouldImport: режимы true/false/auto и смена списка пр
       'auto не переимпортирует при изменившемся списке — только явный restart',
     );
     assert.equal(shouldImport({ ...base, projects: [], settings: normalizeWorkspaceSettings({ import: true }) }), false);
+
+    // Маркер старого каталога не должен отменять импорт в новый workspace.
+    const named = { ...base, wsDir: join(buildDir, 'feature-2520') };
+    assert.equal(
+      shouldImport({ ...named, settings: normalizeWorkspaceSettings({ import: 'auto' }) }),
+      true,
+      'маркер build/ws не относится к build/feature-2520',
+    );
+    assert.equal(shouldImport({ ...named, settings: normalizeWorkspaceSettings({ import: true }) }), true);
+    writeImported(buildDir, ['a', 'b'], { wsDir: join(buildDir, 'feature-2520') });
+    assert.equal(
+      shouldImport({ ...named, settings: normalizeWorkspaceSettings({ import: 'auto' }) }),
+      false,
+      'маркер нового каталога принимается',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -670,6 +686,30 @@ test('statusReport: имя каталога workspace и legacy-подсказк
     writeWorkspaceSnapshot(buildDir, { ...snapshot, wsDir: join(buildDir, 'ws') });
     report = statusReport(root, { alive: () => false });
     assert.match(report.lines.join('\n'), /имя workspace: ws \(старое место/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cmdInit (CLI): активный run-lock блокирует перенос workspace', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const legacy = join(buildDir, 'ws');
+    mkdirSync(join(legacy, '.metadata'), { recursive: true });
+    writeFileSync(join(buildDir, 'init-run.lock'), JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), 'utf8');
+    writeWorkspaceSnapshot(buildDir, { ...snapshotFor(root), wsDir: legacy });
+
+    const code = await cmdInit(root, {}, {
+      currentBranch: () => 'feature/2520',
+      alive: () => true,
+      spawnDetached: () => {
+        throw new Error('run не должен запускаться');
+      },
+    });
+    assert.equal(code, 4, 'импорт уже идёт');
+    assert.equal(existsSync(legacy), true, 'каталог работает — не переименовываем');
+    assert.equal(existsSync(join(buildDir, 'feature-2520')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
