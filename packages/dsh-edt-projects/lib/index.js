@@ -49,6 +49,7 @@ import {
   BUILD_DIR,
   currentBranch,
   detectEdtHome,
+  filePath,
   formatElapsed,
   isPortOpen,
   migrateWorkspaceDir,
@@ -71,8 +72,9 @@ import {
   workspaceDirName,
   writePort,
   writeStamp,
+  writeWorkspaceSnapshot,
 } from './workspace.mjs';
-import { cmdInit, cmdStop as stopWorkspaceNow, lockState, runLockActive } from './workspace-run.mjs';
+import { acquireLock, cmdInit, cmdStop as stopWorkspaceNow, lockState, releaseLock } from './workspace-run.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -915,32 +917,45 @@ export async function apply(ctx, config) {
           writePort(key, port);
         }
         // Имя каталога workspace задаёт заголовок окна EDT, поэтому его
-        // фиксируем здесь, один раз на старт. Старое build/ws переезжает,
-        // только когда EDT не запущен: работающий Eclipse держит файлы.
+        // фиксируем здесь, один раз на старт. Переезд и снимок идут под тем же
+        // run-lock, который фоновый run берёт до чтения снимка: так запуск не
+        // увидит старый путь посреди переноса.
         const branch = currentBranch(plan.root);
         const wsName = workspaceDirName({ root: plan.root, settings: plan.settings, branch });
-        // Состояние перечитываем перед переносом: между чтением в начале и
-        // этим местом были await-ы (порт, health), и EDT мог успеть подняться.
-        const live = workspaceState(key, { alive: cheapAlive });
-        // Импорт в другом процессе ещё не пишет pid GUI, но держит run-lock:
-        // такой запуск тоже запрещает переезд каталога.
-        if (busyLaunching(live, plan.settings) || runLockActive(key, plan.settings, { alive: cheapAlive })) return live;
-        const running = live.pid?.pid !== undefined && cheapAlive(live.pid.pid);
-        const moved = migrateWorkspaceDir({ buildDir: key, name: wsName, current: plan.wsDir, running });
-        if (moved.migrated) {
-          ctx.logger?.info?.(`mcp-hub: workspace EDT перенесён в ${moved.wsDir}`);
-        } else if (moved.blocked === 'exists') {
-          ctx.logger?.warn?.(`mcp-hub: каталог ${moved.wsDir} уже существует — workspace остаётся на нём`);
-        } else if (moved.blocked === 'error') {
-          ctx.logger?.warn?.(`mcp-hub: не удалось перенести workspace EDT: ${moved.error?.message ?? moved.error}`);
+        const guardLock = filePath(key, 'runLock');
+        const guardMaxAge = (Math.max(plan.settings.startTimeout, plan.settings.importTimeout) + 600) * 1000;
+        const guard = acquireLock(guardLock, { alive: cheapAlive, maxAgeMs: guardMaxAge });
+        let workspaceSnapshot;
+        try {
+          let wsDir = readWorkspaceSnapshot(key)?.wsDir ?? plan.wsDir;
+          if (guard) {
+            // Состояние перечитываем перед переносом: между чтением в начале и
+            // этим местом были await-ы (порт, health), и EDT мог подняться.
+            const live = workspaceState(key, { alive: cheapAlive });
+            const running = live.pid?.pid !== undefined && cheapAlive(live.pid.pid);
+            const moved = migrateWorkspaceDir({ buildDir: key, name: wsName, current: wsDir, running });
+            wsDir = moved.wsDir;
+            if (moved.migrated) {
+              ctx.logger?.info?.(`mcp-hub: workspace EDT перенесён в ${moved.wsDir}`);
+            } else if (moved.blocked === 'outside') {
+              ctx.logger?.warn?.('mcp-hub: снимок указывает за пределы build — беру каталог этого worktree');
+            } else if (moved.blocked === 'exists') {
+              ctx.logger?.warn?.(`mcp-hub: каталог ${moved.wsDir} уже существует — workspace остаётся на нём`);
+            } else if (moved.blocked === 'error') {
+              ctx.logger?.warn?.(`mcp-hub: не удалось перенести workspace EDT: ${moved.error?.message ?? moved.error}`);
+            }
+          }
+          workspaceSnapshot = prepareWorkspaceSnapshot({
+            root: plan.root,
+            wsDir,
+            mainRoot: plan.mainRoot,
+            settings: plan.settings,
+          });
+          if (options.import === true) workspaceSnapshot.forceImport = true;
+          if (guard) writeWorkspaceSnapshot(key, workspaceSnapshot);
+        } finally {
+          if (guard) releaseLock(guardLock);
         }
-        const workspaceSnapshot = prepareWorkspaceSnapshot({
-          root: plan.root,
-          wsDir: moved.wsDir,
-          mainRoot: plan.mainRoot,
-          settings: plan.settings,
-        });
-        if (options.import === true) workspaceSnapshot.forceImport = true;
         const initLog = join(key, 'logs', 'init.log');
         const code = await cmdInit(plan.root, {}, { snapshot: workspaceSnapshot });
         if (code !== 0) {

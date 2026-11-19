@@ -19,6 +19,7 @@ import {
   readdirSync,
   readlinkSync,
   readSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -188,7 +189,40 @@ export function currentBranch(root, { run = execFileSync } = {}) {
   return branch === '' ? undefined : branch;
 }
 
+/** realpath, но для отсутствующего пути — сам путь. */
+function realOrSelf(value) {
+  try {
+    return realpathSync.native(value);
+  } catch {
+    return value;
+  }
+}
+
+/** Один и тот же каталог (Windows — без учёта регистра, симлинки раскрыты). */
+function sameDir(left, right) {
+  const a = realOrSelf(path.resolve(left));
+  const b = realOrSelf(path.resolve(right));
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
 /**
+ * Каталог workspace, только если это непосредственный ребёнок `build`.
+ *
+ * Снимок может приехать из скопированного репозитория и указывать на чужой
+ * checkout: такой путь нельзя ни переименовывать, ни использовать.
+ * @returns {string|undefined} нормализованный путь или undefined.
+ */
+export function workspaceDirInBuild(buildDir, value) {
+  const raw = text(value);
+  if (raw === undefined) return undefined;
+  const resolved = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(buildDir, raw);
+  return sameDir(path.dirname(resolved), buildDir) ? resolved : undefined;
+}
+
+/**
+ * Имя каталога workspace: явная настройка → ветка → имя каталога worktree →
+ * старое `ws`.
+ *//**
  * Имя каталога workspace: явная настройка → ветка → имя каталога worktree →
  * старое `ws`.
  */
@@ -213,11 +247,10 @@ export function workspaceDirName({ root, settings, branch } = {}) {
 export function planWorkspaceDirs({ root, settings, snapshot } = {}) {
   const buildDir = path.join(root, BUILD_DIR);
   const configured = sanitizeWorkspaceName(settings?.name);
-  const saved = text(snapshot?.wsDir);
+  const saved = workspaceDirInBuild(buildDir, snapshot?.wsDir);
   if (saved !== undefined) {
-    const wsDir = path.isAbsolute(saved) ? path.normalize(saved) : path.resolve(buildDir, saved);
-    const wsName = path.basename(wsDir);
-    return { buildDir, wsName, wsDir, legacy: wsName === LEGACY_WS_NAME && configured !== LEGACY_WS_NAME };
+    const wsName = path.basename(saved);
+    return { buildDir, wsName, wsDir: saved, legacy: wsName === LEGACY_WS_NAME && configured !== LEGACY_WS_NAME };
   }
 
   const legacyDir = path.join(buildDir, LEGACY_WS_NAME);
@@ -242,12 +275,12 @@ export function migrateWorkspaceDir({ buildDir, name, current, running = false }
   const target = sanitizeWorkspaceName(name) || LEGACY_WS_NAME;
   const desired = path.join(buildDir, target);
   const saved = text(current);
-  const currentDir =
-    saved === undefined
-      ? path.join(buildDir, LEGACY_WS_NAME)
-      : path.isAbsolute(saved)
-        ? path.normalize(saved)
-        : path.resolve(buildDir, saved);
+  const inside = workspaceDirInBuild(buildDir, saved);
+  if (saved !== undefined && inside === undefined) {
+    // Путь из чужого checkout (например, build скопировали целиком): не трогаем.
+    return { wsDir: desired, migrated: false, blocked: 'outside' };
+  }
+  const currentDir = inside ?? path.join(buildDir, LEGACY_WS_NAME);
   if (path.basename(currentDir) === target) return { wsDir: currentDir, migrated: false };
   if (!existsSync(currentDir)) return { wsDir: desired, migrated: false };
   if (existsSync(desired)) return { wsDir: desired, migrated: false, blocked: 'exists' };

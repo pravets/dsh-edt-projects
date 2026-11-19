@@ -27,6 +27,8 @@ import {
   defaultSnapshot,
   parseArgs,
   shouldImport,
+  acquireLock,
+  lockState,
   runLockActive,
   statusReport,
   waitHealth,
@@ -728,6 +730,29 @@ test('runLockActive: живой run-lock считается запуском, м
 
     rmSync(lock, { force: true });
     assert.equal(runLockActive(buildDir, {}, { alive: () => true }), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('lockState: срок жизни задаёт владелец lock, а не текущие настройки', () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    mkdirSync(buildDir, { recursive: true });
+    const file = join(buildDir, 'init-run.lock');
+    const at = new Date(Date.now() - 20 * 60_000).toISOString();
+    writeFileSync(file, JSON.stringify({ pid: 4242, at, maxAgeMs: 60 * 60_000 }), 'utf8');
+    // Свежие настройки дали бы 11 минут — lock с 20 минутами был бы «просрочен».
+    const state = lockState(file, { alive: () => true, maxAgeMs: 11 * 60_000 });
+    assert.equal(state.stale, false, 'владелец lock задал свой срок');
+
+    writeFileSync(file, JSON.stringify({ pid: 4242, at, maxAgeMs: 10 * 60_000 }), 'utf8');
+    assert.equal(lockState(file, { alive: () => true }).stale, true);
+
+    rmSync(file, { force: true });
+    assert.equal(acquireLock(file, { maxAgeMs: 1234 * 1000 }), true);
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).maxAgeMs, 1234 * 1000);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

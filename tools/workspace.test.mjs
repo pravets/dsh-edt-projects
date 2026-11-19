@@ -40,6 +40,7 @@ import {
   resolveWorkspaceTarget,
   stateOf,
   tailFile,
+  workspaceDirInBuild,
   workspaceDirName,
   writePort,
   writePrefs,
@@ -750,6 +751,35 @@ test('prepareWorkspaceSnapshot: явный wsDir и имя из настройк
     assert.equal(prepareWorkspaceSnapshot({ root: dir, settings, wsDir: explicit }).wsDir, explicit);
     const named = prepareWorkspaceSnapshot({ root: dir, settings: normalizeWorkspaceSettings({ name: 'task 42' }) });
     assert.equal(named.wsDir, join(dir, 'build', 'task-42'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('workspaceDirInBuild: только непосредственный ребёнок build, чужие пути отбрасываются', () => {
+  const dir = tempDir();
+  try {
+    const buildDir = join(dir, 'build');
+    assert.equal(workspaceDirInBuild(buildDir, 'feature-2520'), join(buildDir, 'feature-2520'));
+    assert.equal(workspaceDirInBuild(buildDir, join(buildDir, 'feature-2520')), join(buildDir, 'feature-2520'));
+    assert.equal(workspaceDirInBuild(buildDir, join(dir, 'other', 'ws')), undefined, 'чужой checkout');
+    assert.equal(workspaceDirInBuild(buildDir, '..'), undefined, 'выход из build');
+    assert.equal(workspaceDirInBuild(buildDir, join(buildDir, 'nested', 'ws')), undefined, 'не прямой ребёнок');
+    assert.equal(workspaceDirInBuild(buildDir, ''), undefined);
+
+    // Снимок из скопированного репозитория не должен выбирать чужой каталог.
+    const foreign = join(dir, 'foreign', 'ws');
+    touch(join(foreign, '.metadata', '.log'));
+    const plan = planWorkspaceDirs({ root: dir, settings: normalizeWorkspaceSettings({}), snapshot: { wsDir: foreign } });
+    assert.equal(plan.wsDir, join(buildDir, 'ws'), 'берём каталог этого worktree');
+    assert.equal(plan.legacy, false);
+
+    // И не должен переименовывать чужой каталог.
+    const moved = migrateWorkspaceDir({ buildDir, name: 'feature-2520', current: foreign });
+    assert.equal(moved.migrated, false);
+    assert.equal(moved.blocked, 'outside');
+    assert.equal(existsSync(foreign), true, 'чужой каталог цел');
+    assert.equal(moved.wsDir, join(buildDir, 'feature-2520'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
