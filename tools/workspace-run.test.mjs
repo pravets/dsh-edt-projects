@@ -27,6 +27,9 @@ import {
   defaultSnapshot,
   parseArgs,
   shouldImport,
+  acquireLock,
+  lockState,
+  runLockActive,
   statusReport,
   waitHealth,
   waitReady,
@@ -66,12 +69,13 @@ test('parseArgs: действие, флаги и значения', () => {
   assert.equal(parseArgs(['run']).import, undefined);
 });
 
-test('defaultSnapshot: настройки по умолчанию и найденные проекты', () => {
+test('defaultSnapshot: настройки по умолчанию, каталог из файлов и найденные проекты', () => {
   const root = tempRoot();
   try {
     const cf = projectDir(root, 'src/cf');
     const snapshot = defaultSnapshot(root, {});
     assert.equal(snapshot.buildDir, join(root, 'build'));
+    assert.equal(snapshot.wsDir, join(root, 'build', 'ws'), 'без снимка и старого каталога — старое место');
     assert.deepEqual(snapshot.projects, [cf]);
     assert.equal(snapshot.settings.import, 'auto');
   } finally {
@@ -95,8 +99,8 @@ test('cmdInit занимает порт, пишет prefs и запускает 
     });
     assert.equal(code, 0);
     assert.equal(readPort(join(root, 'build')), 23456);
-    assert.match(readFileSync(prefsPath(join(root, 'build')), 'utf8'), /mcpServerPort=23456/);
-    const prefs = readFileSync(prefsPath(join(root, 'build')), 'utf8');
+    assert.match(readFileSync(prefsPath(join(root, 'build', 'ws')), 'utf8'), /mcpServerPort=23456/);
+    const prefs = readFileSync(prefsPath(join(root, 'build', 'ws')), 'utf8');
     assert.match(prefs, /mcpServerHttpEnabled=true/);
     assert.match(prefs, /mcpPlainTextMode=true/, 'plain text включается до запуска EDT');
     assert.match(prefs, /mcpDisabledTools=git,ask_workmate/, 'get_form_screenshot включён до запуска EDT');
@@ -191,7 +195,7 @@ test('cmdRun без импорта запускает EDT и дожидаетс�
     assert.equal(spawned[0].command, join(root, 'fake-1cedt'));
     assert.deepEqual(spawned[0].args.slice(0, 3), ['-nosplash', '-data', join(buildDir, 'ws')]);
     assert.ok(spawned[0].args.includes('-DnativeFormBufferedLayoutRender=true'), 'флаг скриншотов форм');
-    const prefs = readFileSync(prefsPath(buildDir), 'utf8');
+    const prefs = readFileSync(prefsPath(join(buildDir, 'ws')), 'utf8');
     assert.match(prefs, /mcpPlainTextMode=true/);
     assert.match(prefs, /mcpDisabledTools=git,ask_workmate\n/);
     assert.equal(readPid(buildDir).pid, 4242);
@@ -374,12 +378,13 @@ test('shouldImport: режимы true/false/auto и смена списка пр
   const root = tempRoot();
   try {
     const buildDir = join(root, 'build');
-    const base = { buildDir, projects: ['a', 'b'] };
+    const base = { buildDir, wsDir: join(buildDir, 'ws'), projects: ['a', 'b'] };
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: false }) }), false);
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: 'auto' }) }), true, 'нет маркера и пустой workspace');
 
     writeImported(buildDir, ['a', 'b']);
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: 'auto' }) }), false, 'маркер совпадает');
+
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: true }) }), false, 'список не изменился');
     assert.equal(shouldImport({ ...base, settings: normalizeWorkspaceSettings({ import: true }) }, { force: true }), true);
     assert.equal(
@@ -393,6 +398,21 @@ test('shouldImport: режимы true/false/auto и смена списка пр
       'auto не переимпортирует при изменившемся списке — только явный restart',
     );
     assert.equal(shouldImport({ ...base, projects: [], settings: normalizeWorkspaceSettings({ import: true }) }), false);
+
+    // Маркер старого каталога не должен отменять импорт в новый workspace.
+    const named = { ...base, wsDir: join(buildDir, 'feature-2520') };
+    assert.equal(
+      shouldImport({ ...named, settings: normalizeWorkspaceSettings({ import: 'auto' }) }),
+      true,
+      'маркер build/ws не относится к build/feature-2520',
+    );
+    assert.equal(shouldImport({ ...named, settings: normalizeWorkspaceSettings({ import: true }) }), true);
+    writeImported(buildDir, ['a', 'b'], { wsDir: join(buildDir, 'feature-2520') });
+    assert.equal(
+      shouldImport({ ...named, settings: normalizeWorkspaceSettings({ import: 'auto' }) }),
+      false,
+      'маркер нового каталога принимается',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -406,7 +426,7 @@ test('shouldImport: auto не трогает workspace, где проекты у
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'cf'), '', 'utf8');
     assert.equal(
-      shouldImport({ buildDir, projects: ['a'], settings: normalizeWorkspaceSettings({ import: 'auto' }) }),
+      shouldImport({ buildDir, wsDir: join(buildDir, 'ws'), projects: ['a'], settings: normalizeWorkspaceSettings({ import: 'auto' }) }),
       false,
     );
   } finally {
@@ -590,4 +610,200 @@ test('waitHealth: опрашивает до готовности и уважае
 
   const timedOut = await waitHealth(23456, 0, { probeHealth: async () => false, sleep: async () => {}, pollMs: 1 });
   assert.equal(timedOut, false);
+});
+
+test('cmdInit (CLI): переносит build/ws в каталог ветки и пишет снимок', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const legacy = join(buildDir, 'ws');
+    mkdirSync(join(legacy, '.metadata'), { recursive: true });
+    writeFileSync(join(legacy, '.metadata', '.log'), 'старое окружение\n', 'utf8');
+
+    const spawns = [];
+    const code = await cmdInit(root, {}, {
+      currentBranch: () => 'feature/2520',
+      pickFreePort: async () => 23456,
+      isPortFree: async () => true,
+      spawnDetached: (...args) => {
+        spawns.push(args);
+        return { pid: 111 };
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(existsSync(legacy), false, 'старое место переехало');
+    assert.equal(readFileSync(join(buildDir, 'feature-2520', '.metadata', '.log'), 'utf8'), 'старое окружение\n');
+    const saved = JSON.parse(readFileSync(join(buildDir, 'workspace.json'), 'utf8'));
+    assert.equal(saved.wsDir, join(buildDir, 'feature-2520'));
+    assert.match(readFileSync(prefsPath(join(buildDir, 'feature-2520')), 'utf8'), /mcpServerPort=23456/);
+    assert.equal(spawns.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cmdInit (CLI): при запущенном EDT не переименовывает workspace', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const legacy = join(buildDir, 'ws');
+    mkdirSync(join(legacy, '.metadata'), { recursive: true });
+    writePid(buildDir, 4242);
+
+    let spawned = 0;
+    const code = await cmdInit(root, {}, {
+      currentBranch: () => 'feature/2520',
+      alive: () => true,
+      pickFreePort: async () => 23456,
+      isPortFree: async () => true,
+      spawnDetached: () => {
+        spawned += 1;
+        return { pid: 1 };
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned, 0, 'окружение уже поднимается');
+    assert.equal(existsSync(legacy), true, 'работающий EDT держит файлы — не трогаем');
+    assert.equal(existsSync(join(buildDir, 'feature-2520')), false);
+    const saved = JSON.parse(readFileSync(join(buildDir, 'workspace.json'), 'utf8'));
+    assert.equal(saved.wsDir, legacy);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('statusReport: имя каталога workspace и legacy-подсказка', () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const snapshot = { ...snapshotFor(root), wsDir: join(buildDir, 'feature-2520') };
+    writeWorkspaceSnapshot(buildDir, snapshot);
+    let report = statusReport(root, { alive: () => false });
+    assert.equal(report.data.workspaceName, 'feature-2520');
+    assert.match(report.lines.join('\n'), /имя workspace: feature-2520/);
+
+    writeWorkspaceSnapshot(buildDir, { ...snapshot, wsDir: join(buildDir, 'ws') });
+    report = statusReport(root, { alive: () => false });
+    assert.match(report.lines.join('\n'), /имя workspace: ws \(старое место/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cmdInit (CLI): активный run-lock блокирует перенос workspace', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const legacy = join(buildDir, 'ws');
+    mkdirSync(join(legacy, '.metadata'), { recursive: true });
+    writeFileSync(join(buildDir, 'init-run.lock'), JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), 'utf8');
+    writeWorkspaceSnapshot(buildDir, { ...snapshotFor(root), wsDir: legacy });
+
+    const code = await cmdInit(root, {}, {
+      currentBranch: () => 'feature/2520',
+      alive: () => true,
+      spawnDetached: () => {
+        throw new Error('run не должен запускаться');
+      },
+    });
+    assert.equal(code, 4, 'импорт уже идёт');
+    assert.equal(existsSync(legacy), true, 'каталог работает — не переименовываем');
+    assert.equal(existsSync(join(buildDir, 'feature-2520')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runLockActive: живой run-lock считается запуском, мёртвый и просроченный — нет', () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    mkdirSync(buildDir, { recursive: true });
+    const lock = join(buildDir, 'init-run.lock');
+    const now = new Date().toISOString();
+
+    writeFileSync(lock, JSON.stringify({ pid: 4242, at: now }), 'utf8');
+    assert.equal(runLockActive(buildDir, {}, { alive: () => true }), true);
+    assert.equal(runLockActive(buildDir, {}, { alive: () => false }), false, 'мёртвый pid — lock осиротел');
+    writeFileSync(lock, JSON.stringify({ pid: 4242, at: new Date(Date.now() - 3 * 24 * 3600_000).toISOString() }), 'utf8');
+    assert.equal(runLockActive(buildDir, {}, { alive: () => true }), false, 'просроченный lock не держит');
+
+    rmSync(lock, { force: true });
+    assert.equal(runLockActive(buildDir, {}, { alive: () => true }), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('lockState: срок жизни задаёт владелец lock, а не текущие настройки', () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    mkdirSync(buildDir, { recursive: true });
+    const file = join(buildDir, 'init-run.lock');
+    const at = new Date(Date.now() - 20 * 60_000).toISOString();
+    writeFileSync(file, JSON.stringify({ pid: 4242, at, maxAgeMs: 60 * 60_000 }), 'utf8');
+    // Свежие настройки дали бы 11 минут — lock с 20 минутами был бы «просрочен».
+    const state = lockState(file, { alive: () => true, maxAgeMs: 11 * 60_000 });
+    assert.equal(state.stale, false, 'владелец lock задал свой срок');
+
+    writeFileSync(file, JSON.stringify({ pid: 4242, at, maxAgeMs: 10 * 60_000 }), 'utf8');
+    assert.equal(lockState(file, { alive: () => true }).stale, true);
+
+    rmSync(file, { force: true });
+    assert.equal(acquireLock(file, { maxAgeMs: 1234 * 1000 }), true);
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).maxAgeMs, 1234 * 1000);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cmdInit: чужой wsDir в переданном снимке не используется', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const foreign = join(root, 'foreign', 'ws');
+    mkdirSync(foreign, { recursive: true });
+    const snapshot = { ...snapshotFor(root), wsDir: foreign };
+    const code = await cmdInit(root, {}, {
+      snapshot,
+      pickFreePort: async () => 23456,
+      isPortFree: async () => true,
+      spawnDetached: () => ({ pid: 111 }),
+    });
+    assert.equal(code, 0);
+    const saved = JSON.parse(readFileSync(join(buildDir, 'workspace.json'), 'utf8'));
+    assert.equal(saved.wsDir, join(buildDir, 'ws'), 'взят каталог этого worktree');
+    assert.equal(existsSync(foreign), true, 'чужой каталог не тронут');
+    assert.match(readFileSync(prefsPath(join(buildDir, 'ws')), 'utf8'), /mcpServerPort=23456/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cmdInit: путь из файла главнее переданного снимка', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const alpha = join(buildDir, 'alpha');
+    const beta = join(buildDir, 'beta');
+    mkdirSync(alpha, { recursive: true });
+    mkdirSync(beta, { recursive: true });
+    writeWorkspaceSnapshot(buildDir, { ...snapshotFor(root), wsDir: beta });
+    const passed = { ...snapshotFor(root), wsDir: alpha };
+
+    const code = await cmdInit(root, {}, {
+      snapshot: passed,
+      pickFreePort: async () => 23456,
+      isPortFree: async () => true,
+      spawnDetached: () => ({ pid: 111 }),
+    });
+    assert.equal(code, 0);
+    const saved = JSON.parse(readFileSync(join(buildDir, 'workspace.json'), 'utf8'));
+    assert.equal(saved.wsDir, beta, 'соседний процесс уже переехал — берём его путь');
+    assert.equal(existsSync(prefsPath(beta)), true);
+    assert.equal(existsSync(prefsPath(alpha)), false, 'пустой старый каталог не трогаем');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

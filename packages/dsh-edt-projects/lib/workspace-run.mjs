@@ -23,6 +23,7 @@ import {
   appendImportDigest,
   buildWorkspaceSnapshot,
   clearProgress,
+  currentBranch,
   detectEdtHome,
   discoverProjects,
   filePath,
@@ -34,9 +35,12 @@ import {
   importScriptText,
   isPortFree,
   killTree,
+  LEGACY_WS_NAME,
+  migrateWorkspaceDir,
   normalizeWorkspaceSettings,
   pickFreePort,
   pidAlive,
+  planWorkspaceDirs,
   probeHealth,
   readImported,
   readPid,
@@ -47,6 +51,8 @@ import {
   resolveEdtVm,
   stateOf,
   tailFile,
+  workspaceDirInBuild,
+  workspaceDirName,
   writeImported,
   writePid,
   writePort,
@@ -148,7 +154,10 @@ export function lockState(file, deps = {}) {
   const pid = Number.parseInt(info.pid, 10);
   const at = Date.parse(info.at ?? '');
   const ageMs = Number.isNaN(at) ? undefined : Math.max(0, Date.now() - at);
-  const maxAgeMs = deps.maxAgeMs ?? LOCK_MAX_AGE_MS;
+  // Срок задаёт владелец lock при захвате: смена настроек не должна внезапно
+  // делать живой импорт «просроченным».
+  const storedAge = Number.isFinite(info.maxAgeMs) && info.maxAgeMs > 0 ? info.maxAgeMs : undefined;
+  const maxAgeMs = storedAge ?? deps.maxAgeMs ?? LOCK_MAX_AGE_MS;
   const alive = deps.alive ?? ((value) => pidAlive(value));
   const live = Number.isInteger(pid) && pid > 0 && alive(pid);
   return {
@@ -158,6 +167,13 @@ export function lockState(file, deps = {}) {
     ageMs,
     stale: !live || (ageMs !== undefined && ageMs > maxAgeMs),
   };
+}
+
+/** Идёт ли подъём/импорт в фоне (`init-run.lock` жив и не просрочен). */
+export function runLockActive(buildDir, settings = {}, deps = {}) {
+  const maxAgeMs = (Math.max(settings?.startTimeout ?? 1800, settings?.importTimeout ?? 3600) + 600) * 1000;
+  const lock = lockState(filePath(buildDir, 'runLock'), { ...deps, maxAgeMs });
+  return lock.exists === true && lock.stale !== true;
 }
 
 /**
@@ -187,21 +203,31 @@ export function acquireLock(file, deps = {}) {
       }
     }
     try {
-      writeFileSync(
-        file,
-        JSON.stringify({
-          pid: process.pid,
-          at: now.toISOString(),
-          image: path.basename(process.execPath),
-        }),
-        { flag: 'wx' },
-      );
+      const payload = {
+        pid: process.pid,
+        at: now.toISOString(),
+        image: path.basename(process.execPath),
+      };
+      if (Number.isFinite(deps.maxAgeMs) && deps.maxAgeMs > 0) payload.maxAgeMs = deps.maxAgeMs;
+      writeFileSync(file, JSON.stringify(payload), { flag: 'wx' });
       return true;
     } catch {
       // кто-то успел создать lock — повторим проверку
     }
   }
   return false;
+}
+
+/** Обновляет поля своего lock (например, срок после чтения настроек). */
+export function updateLock(file, patch = {}) {
+  const info = lockInfo(file);
+  if (info === null || info.pid !== process.pid) return false;
+  try {
+    writeFileSync(file, JSON.stringify({ ...info, ...patch }), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function releaseLock(file) {
@@ -215,7 +241,14 @@ export function releaseLock(file) {
   }
 }
 
-/** Нужно ли импортировать проекты в этот workspace. */
+/** Относится ли маркер импорта к этому каталогу workspace. */
+function markerMatchesWorkspace(marker, wsDir) {
+  const saved = typeof marker?.wsDir === 'string' ? marker.wsDir : '';
+  if (saved !== '') return path.resolve(saved) === path.resolve(wsDir);
+  // Маркеры до 0.14 каталога не знали: они относятся к старому build/ws.
+  return path.basename(wsDir) === LEGACY_WS_NAME;
+}
+
 export function shouldImport(snapshot, { force } = {}, deps = {}) {
   const settings = snapshot.settings;
   const projects = Array.isArray(snapshot.projects) ? snapshot.projects : [];
@@ -225,20 +258,21 @@ export function shouldImport(snapshot, { force } = {}, deps = {}) {
 
   const imported = deps.readImported ?? readImported;
   const marker = imported(snapshot.buildDir);
+  const markerForWorkspace = marker !== null && markerMatchesWorkspace(marker, snapshot.wsDir);
   const same =
-    marker !== null &&
+    markerForWorkspace &&
     Array.isArray(marker.projects) &&
     marker.projects.length === projects.length &&
     marker.projects.every((item, index) => item === projects[index]);
   if (same) return false;
   if (settings.import === true) return true;
 
-  // "auto": либо маркер уже есть (список мог измениться — это повод для
-  // явного restart с import: true, но не для фонового импорта), либо в
-  // workspace уже есть проекты (их импортировали руками).
-  if (marker !== null) return false;
+  // "auto": либо маркер этого каталога уже есть (список мог измениться — это
+  // повод для явного restart с import: true, но не для фонового импорта),
+  // либо в workspace уже есть проекты (их импортировали руками).
+  if (markerForWorkspace) return false;
   const registered = deps.hasRegisteredProjects ?? defaultHasRegisteredProjects;
-  return !registered(registeredProjectsDir(snapshot.buildDir));
+  return !registered(registeredProjectsDir(snapshot.wsDir));
 }
 
 function defaultHasRegisteredProjects(dir) {
@@ -262,10 +296,13 @@ function snapshotOrThrow(root) {
 export function defaultSnapshot(root, env = process.env) {
   const settings = normalizeWorkspaceSettings({}, env);
   const buildDir = path.join(root, 'build');
+  // Имя по ветке требует git, поэтому здесь только фактический каталог: план
+  // покажет старое build/ws, а переезд в build/<ветка> сделает cmdInit.
+  const dirs = planWorkspaceDirs({ root, settings, snapshot: undefined });
   return buildWorkspaceSnapshot({
     root,
     buildDir,
-    wsDir: path.join(buildDir, 'ws'),
+    wsDir: dirs.wsDir,
     mainRoot: undefined,
     settings,
     projects: discoverProjects(root, settings.projects),
@@ -277,10 +314,16 @@ export function defaultSnapshot(root, env = process.env) {
  * @returns {Promise<number>} код возврата.
  */
 export async function cmdInit(root, args = {}, deps = {}) {
-  const snapshot = deps.snapshot ?? readWorkspaceSnapshot(path.join(root, 'build')) ?? defaultSnapshot(root);
+  let snapshot = deps.snapshot ?? readWorkspaceSnapshot(path.join(root, 'build')) ?? defaultSnapshot(root);
   const buildDir = snapshot.buildDir;
   mkdirSync(buildDir, { recursive: true });
-  writeWorkspaceSnapshot(buildDir, snapshot);
+  if (snapshot.wsDir !== undefined && workspaceDirInBuild(buildDir, snapshot.wsDir) === undefined) {
+    // Путь из чужого checkout (build скопировали целиком) не используем.
+    snapshot = {
+      ...snapshot,
+      wsDir: planWorkspaceDirs({ root, settings: snapshot.settings, snapshot: readWorkspaceSnapshot(buildDir) }).wsDir,
+    };
+  }
 
   const lock = filePath(buildDir, 'lock');
   if (!acquireLock(lock, deps)) {
@@ -305,6 +348,52 @@ export async function cmdInit(root, args = {}, deps = {}) {
       logTo(buildDir, 'init: снят осиротевший run-lock');
     }
 
+    // Имя каталога workspace определяет заголовок окна EDT. Переезд и запись
+    // снимка идут под run-lock: запуск читает снимок только получив этот lock,
+    // поэтому не увидит старый путь посреди переноса.
+    const initRunLock = filePath(buildDir, 'runLock');
+    const guard = acquireLock(initRunLock, { ...deps, maxAgeMs, image: path.basename(process.execPath) });
+    try {
+      if (!guard) {
+        // Запуск уже начался между проверкой и захватом: каталог не двигаем и
+        // снимок не перезаписываем, иначе затрём чужой новый путь.
+        logTo(buildDir, 'init: параллельный подъём уже идёт, выходим');
+        return 4;
+      }
+      // Под локом путь берём из файла: соседний процесс мог только что
+      // переехать каталог, а переданный снимок (и план) ещё помнят старый.
+      const stored = workspaceDirInBuild(buildDir, readWorkspaceSnapshot(buildDir)?.wsDir);
+      if (stored !== undefined) snapshot = { ...snapshot, wsDir: stored };
+
+      if (deps.snapshot === undefined) {
+        const alive = deps.alive ?? ((pid) => pidAlive(pid, ['1cedt']));
+        const runningPid = readPid(buildDir)?.pid;
+        const branch = (deps.currentBranch ?? currentBranch)(root, { run: deps.run });
+        const name = workspaceDirName({ root, settings: snapshot.settings, branch });
+        const moved = migrateWorkspaceDir({
+          buildDir,
+          name,
+          current: snapshot.wsDir,
+          running: runningPid !== undefined && alive(runningPid),
+        });
+        snapshot = { ...snapshot, wsDir: moved.wsDir };
+        if (moved.migrated) {
+          logTo(buildDir, `init: workspace перенесён в ${path.basename(moved.wsDir)}`);
+        } else if (moved.blocked === 'running') {
+          logTo(buildDir, 'init: EDT запущен — workspace остаётся на старом месте');
+        } else if (moved.blocked === 'outside') {
+          logTo(buildDir, 'init: снимок указывает за пределы build — беру каталог этого worktree');
+        } else if (moved.blocked === 'exists') {
+          logTo(buildDir, `init: каталог ${path.basename(moved.wsDir)} уже существует — остаюсь на нём`);
+        } else if (moved.blocked === 'error') {
+          logTo(buildDir, `init: не удалось переименовать workspace (${moved.error?.message ?? moved.error}) — продолжаю на старом месте`);
+        }
+      }
+      // Снимок пишется только под run-lock: фоновый run читает каталог из него.
+      writeWorkspaceSnapshot(buildDir, snapshot);
+    } finally {
+      if (guard) releaseLock(initRunLock);
+    }
     const state = stateOf(buildDir, { alive: deps.alive });
     if (state.label === 'ready') {
       logTo(buildDir, 'init: окружение уже готово, делать нечего');
@@ -326,7 +415,7 @@ export async function cmdInit(root, args = {}, deps = {}) {
       port = await (deps.pickFreePort ?? pickFreePort)(snapshot.settings.ports, { isFree: free });
       writePort(buildDir, port);
     }
-    const prefs = writePrefs(buildDir, port, {
+    const prefs = writePrefs(snapshot.wsDir, port, {
       plainText: snapshot.settings.plainText,
       formScreenshots: snapshot.settings.formScreenshots,
     });
@@ -344,25 +433,29 @@ export async function cmdInit(root, args = {}, deps = {}) {
  * @returns {Promise<number>}
  */
 export async function cmdRun(root, args = {}, deps = {}) {
-  const snapshot = deps.snapshot ?? readWorkspaceSnapshot(path.join(root, 'build'));
-  if (snapshot === undefined) {
-    console.error('run: нет workspace.json — сначала init');
-    return 1;
-  }
-  const buildDir = snapshot.buildDir;
-  const settings = snapshot.settings;
-  const log = (message) => logTo(buildDir, message, deps.now?.());
-  mkdirSync(path.join(buildDir, 'logs'), { recursive: true });
+  const buildDirGuess = path.join(root, 'build');
+  mkdirSync(path.join(buildDirGuess, 'logs'), { recursive: true });
 
-  const lock = filePath(buildDir, 'runLock');
-  const maxAgeMs = (Math.max(settings.startTimeout, settings.importTimeout) + 600) * 1000;
-  if (!acquireLock(lock, { ...deps, maxAgeMs, image: path.basename(process.execPath) })) {
-    const holder = lockState(lock, { ...deps, maxAgeMs });
-    log(`run: другой запуск уже идёт (pid ${holder.pid ?? '?'}, возраст ${holder.ageMs === undefined ? '?' : `${Math.round(holder.ageMs / 1000)}s`}), выходим`);
+  // Lock берём до чтения снимка: так перенос каталога в init (он держит этот
+  // же lock) не может случиться между чтением пути и импортом.
+  const lock = filePath(buildDirGuess, 'runLock');
+  const defaultAgeMs = Number.isFinite(deps.maxAgeMs) ? deps.maxAgeMs : (Math.max(1800, 3600) + 600) * 1000;
+  if (!acquireLock(lock, { ...deps, maxAgeMs: defaultAgeMs, image: path.basename(process.execPath) })) {
+    const holder = lockState(lock, deps);
+    logTo(buildDirGuess, `run: другой запуск уже идёт (pid ${holder.pid ?? '?'}, возраст ${holder.ageMs === undefined ? '?' : `${Math.round(holder.ageMs / 1000)}s`}), выходим`);
     return 2;
   }
 
   try {
+    const snapshot = deps.snapshot ?? readWorkspaceSnapshot(buildDirGuess);
+    if (snapshot === undefined) {
+      console.error('run: нет workspace.json — сначала init');
+      return 1;
+    }
+    const buildDir = snapshot.buildDir;
+    const settings = snapshot.settings;
+    const log = (message) => logTo(buildDir, message, deps.now?.());
+    updateLock(lock, { maxAgeMs: (Math.max(settings.startTimeout, settings.importTimeout) + 600) * 1000 });
     const state = stateOf(buildDir, { alive: deps.alive });
     if (state.label === 'ready') {
       log('run: окружение уже готово');
@@ -415,7 +508,7 @@ export async function cmdRun(root, args = {}, deps = {}) {
       const seenProjects = new Set();
       let lastProject;
       const tick = () => {
-        const digest = (deps.importDigest ?? importDigest)(buildDir, offset, total, deps);
+        const digest = (deps.importDigest ?? importDigest)(snapshot.wsDir, offset, total, deps);
         offset = digest.offset;
         (deps.appendImportDigest ?? appendImportDigest)(buildDir, digest.lines);
         const memory = importMemoryWarning(digest.text);
@@ -441,7 +534,7 @@ export async function cmdRun(root, args = {}, deps = {}) {
       } catch (error) {
         clearInterval(ticker);
         tick();
-        const detail = `импорт не удался (${lastImportDetail}): ${error?.message ?? error}; см. build/ws/.metadata/.log`;
+        const detail = `импорт не удался (${lastImportDetail}): ${error?.message ?? error}; см. ${path.relative(root, snapshot.wsDir)}/.metadata/.log`;
         writeProgress(buildDir, 'edt', 'import-failed', detail, deps.now?.(), importWarning === undefined ? undefined : { warning: importWarning });
         writeStamp(buildDir, 'failed', deps.now?.());
         log(`edt: FAILED: ${detail}`);
@@ -449,7 +542,7 @@ export async function cmdRun(root, args = {}, deps = {}) {
       }
       clearInterval(ticker);
       tick();
-      writeImported(buildDir, snapshot.projects, deps.now?.());
+      writeImported(buildDir, snapshot.projects, { wsDir: snapshot.wsDir, now: deps.now?.() });
       log(`edt: импорт завершён (${lastImportDetail})`);
       if (importWarning !== undefined) {
         log(`edt: импорт шёл на пределе памяти (${importWarning.used ?? '?'}/${importWarning.total ?? '?'} MB) — поднимите workspace.xmxImport`);
@@ -462,7 +555,7 @@ export async function cmdRun(root, args = {}, deps = {}) {
       log('edt: импорт не требуется');
     }
 
-    writePrefs(buildDir, port, {
+    writePrefs(snapshot.wsDir, port, {
       plainText: settings.plainText,
       formScreenshots: settings.formScreenshots,
     });
@@ -625,15 +718,17 @@ export async function cmdStopAll({ repo, root }, deps = {}) {
 export function statusReport(root, deps = {}) {
   const buildDir = path.join(root, 'build');
   const snapshot = readWorkspaceSnapshot(buildDir);
+  const settings = snapshot?.settings ?? normalizeWorkspaceSettings({});
+  const dirs = planWorkspaceDirs({ root, settings, snapshot });
   const state = stateOf(buildDir, { alive: deps.alive });
   const progress = state.progress?.edt;
   const lines = [
     `worktree: ${root}`,
     `состояние: ${state.label}`,
-    `workspace: ${snapshot?.wsDir ?? path.join(buildDir, 'ws')}`,
+    `workspace: ${dirs.wsDir}`,
+    `имя workspace: ${dirs.wsName}${dirs.legacy ? ' (старое место, переедет при следующем старте)' : ''}`,
     `порт: ${state.port ?? '-'}  pid: ${state.pid?.pid ?? '-'}`,
   ];
-  const settings = snapshot?.settings ?? normalizeWorkspaceSettings({});
   const home = detectEdtHome(settings, { platform: process.platform, env: process.env });
   const required = requiredJava(home.home, { platform: process.platform });
   const vm = resolveEdtVm(settings, home.home, { platform: process.platform, env: process.env });
@@ -645,7 +740,14 @@ export function statusReport(root, deps = {}) {
   }
   if (state.imported?.projects) lines.push(`импортировано проектов: ${state.imported.projects.length}`);
   lines.push(`логи: ${path.join(buildDir, 'logs')}`);
-  return { root, buildDir, snapshot, state, lines, data: { ...state, workspace: snapshot?.wsDir, root } };
+  return {
+    root,
+    buildDir,
+    snapshot,
+    state,
+    lines,
+    data: { ...state, workspace: dirs.wsDir, workspaceName: dirs.wsName, root },
+  };
 }
 
 /** Точка входа CLI. */

@@ -22,8 +22,11 @@ import {
   isPortFree,
   mcpEvidence,
   mergePrefsText,
+  currentBranch,
+  migrateWorkspaceDir,
   normalizeWorkspaceSettings,
   parseImportProgress,
+  planWorkspaceDirs,
   pickFreePort,
   prefsPath,
   prepareWorkspaceSnapshot,
@@ -32,10 +35,13 @@ import {
   readPort,
   removeStamp,
   requiredJava,
+  sanitizeWorkspaceName,
   resolveEdtVm,
   resolveWorkspaceTarget,
   stateOf,
   tailFile,
+  workspaceDirInBuild,
+  workspaceDirName,
   writePort,
   writePrefs,
   writeProgress,
@@ -100,7 +106,7 @@ test('resolveWorkspaceTarget: выключено, основной checkout, н�
   }
 });
 
-test('resolveWorkspaceTarget: worktree — build/ws и порт по умолчанию', () => {
+test('resolveWorkspaceTarget: worktree — предварительный build/ws до первого снимка', () => {
   const dir = tempDir();
   try {
     const root = join(dir, 'wt');
@@ -209,8 +215,9 @@ test('writePrefs пишет файл в workspace', () => {
   const dir = tempDir();
   try {
     const buildDir = join(dir, 'build');
-    const file = writePrefs(buildDir, 23456);
-    assert.equal(file, prefsPath(buildDir));
+    const wsDir = join(buildDir, 'ws');
+    const file = writePrefs(wsDir, 23456);
+    assert.equal(file, prefsPath(wsDir));
     const text = readFileSync(file, 'utf8');
     assert.match(text, /mcpServerAutoStart=true/);
     assert.match(text, /mcpServerPort=23456/);
@@ -554,7 +561,7 @@ test('readFromOffset и importDigest читают только новые стр
     assert.equal(first.offset, statSync(log).size);
 
     writeFileSync(log, `${readFileSync(log, 'utf8')}!MESSAGE Project context is started: cf\n`, 'utf8');
-    const digest = importDigest(buildDir, first.offset, 19);
+    const digest = importDigest(join(buildDir, 'ws'), first.offset, 19);
     assert.equal(digest.startedCount, 1);
     assert.equal(digest.current, 'cf');
     assert.ok(digest.lines.some((line) => line.includes('Project context is started')));
@@ -585,5 +592,195 @@ test('файлы состояния лежат в build и переживают 
     assert.equal(readPort(buildDir), null);
   } finally {
     rmSync(buildDir, { recursive: true, force: true });
+  }
+});
+
+test('sanitizeWorkspaceName: ветки, кириллица, служебные имена и предел длины', () => {
+  assert.equal(sanitizeWorkspaceName('feature/2520'), 'feature-2520');
+  assert.equal(sanitizeWorkspaceName('feature/исправление-отчёта'), 'feature-исправление-отчёта');
+  assert.equal(sanitizeWorkspaceName('  bugfix//x  '), 'bugfix-x');
+  assert.equal(sanitizeWorkspaceName('a/b'), 'a-b', 'разделитель пути не выводит из build');
+  assert.equal(sanitizeWorkspaceName('..'), '');
+  assert.equal(sanitizeWorkspaceName(''), '');
+  assert.equal(sanitizeWorkspaceName(undefined), '');
+  assert.equal(sanitizeWorkspaceName('logs'), 'ws-logs', 'имя служебного файла занято');
+  assert.equal(sanitizeWorkspaceName('WS'), 'WS', 'регистр сохраняется, старое место доступно явно');
+  assert.equal(sanitizeWorkspaceName('con'), 'ws-con', 'устройство Windows');
+  assert.equal(sanitizeWorkspaceName('a'.repeat(80)).length, 40);
+  assert.equal(sanitizeWorkspaceName(`${'x'.repeat(39)}/tail`), 'x'.repeat(39), 'срез не оставляет дефис на конце');
+});
+
+test('currentBranch: строка git, BOM/CRLF, detached HEAD и ошибка', () => {
+  const calls = [];
+  const run = (command, args, options) => {
+    calls.push({ command, args, options });
+    return ' feature/2520 \r\n';
+  };
+  assert.equal(currentBranch('C:/wt', { run }), 'feature/2520');
+  assert.equal(calls[0].command, 'git');
+  assert.deepEqual(calls[0].args, ['-C', 'C:/wt', 'branch', '--show-current']);
+  assert.equal(currentBranch('C:/wt', { run: () => '\uFEFF\r\n' }), undefined, 'detached HEAD — пусто');
+  assert.equal(
+    currentBranch('C:/wt', {
+      run: () => {
+        throw new Error('git not found');
+      },
+    }),
+    undefined,
+    'нет git — не падаем',
+  );
+  assert.equal(currentBranch('', { run }), undefined);
+});
+
+test('workspaceDirName: настройка, ветка, каталог worktree и старое ws', () => {
+  const root = 'C:/git/wt/feature-2520';
+  assert.equal(workspaceDirName({ root, settings: { name: 'task 42' }, branch: 'feature/2520' }), 'task-42');
+  assert.equal(workspaceDirName({ root, settings: {}, branch: 'feature/2520' }), 'feature-2520');
+  assert.equal(workspaceDirName({ root, settings: {}, branch: undefined }), 'feature-2520');
+  assert.equal(workspaceDirName({ root: 'C:/git/wt/con', settings: {}, branch: undefined }), 'ws-con');
+  assert.equal(workspaceDirName({ settings: {}, branch: undefined }), 'ws');
+});
+
+test('planWorkspaceDirs: снимок главнее, legacy и явное имя', () => {
+  const dir = tempDir();
+  try {
+    const root = join(dir, 'wt');
+    const buildDir = join(root, 'build');
+    const named = join(buildDir, 'feature-2520');
+
+    let plan = planWorkspaceDirs({ root, settings: normalizeWorkspaceSettings({}) });
+    assert.equal(plan.wsName, 'ws', 'до первого снимка имя ещё неизвестно');
+    assert.equal(plan.wsDir, join(buildDir, 'ws'));
+    assert.equal(plan.legacy, false);
+
+    plan = planWorkspaceDirs({ root, settings: normalizeWorkspaceSettings({ name: 'task 42' }) });
+    assert.equal(plan.wsName, 'task-42', 'явная настройка не требует git');
+
+    touch(join(named, '.metadata', '.log'));
+    plan = planWorkspaceDirs({ root, settings: normalizeWorkspaceSettings({}), snapshot: { wsDir: named } });
+    assert.equal(plan.wsDir, named);
+    assert.equal(plan.wsName, 'feature-2520');
+    assert.equal(plan.legacy, false);
+
+    rmSync(named, { recursive: true, force: true });
+    touch(join(buildDir, 'ws', '.metadata', '.log'));
+    plan = planWorkspaceDirs({ root, settings: normalizeWorkspaceSettings({}) });
+    assert.equal(plan.wsName, 'ws');
+    assert.equal(plan.legacy, true, 'старое место без снимка');
+
+    plan = planWorkspaceDirs({
+      root,
+      settings: normalizeWorkspaceSettings({ name: 'task-42' }),
+      snapshot: { wsDir: join(buildDir, 'ws') },
+    });
+    assert.equal(plan.legacy, true, 'снимок показывает старое место');
+
+    // Явное имя, старое окружение и ещё нет снимка: план показывает фактическое
+    // место, переезд в build/task-42 сделает старт.
+    plan = planWorkspaceDirs({ root, settings: normalizeWorkspaceSettings({ name: 'task 42' }) });
+    assert.equal(plan.wsDir, join(buildDir, 'ws'));
+    assert.equal(plan.legacy, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrateWorkspaceDir: переезд, занятый EDT, готовый целевой каталог', () => {
+  const dir = tempDir();
+  try {
+    const buildDir = join(dir, 'build');
+    touch(join(buildDir, 'ws', '.metadata', 'marker'), 'x');
+
+    const moved = migrateWorkspaceDir({ buildDir, name: 'feature/2520' });
+    assert.equal(moved.migrated, true);
+    assert.equal(moved.wsDir, join(buildDir, 'feature-2520'));
+    assert.equal(existsSync(join(buildDir, 'ws')), false);
+    assert.equal(readFileSync(join(moved.wsDir, '.metadata', 'marker'), 'utf8'), 'x', 'содержимое переехало');
+
+    assert.deepEqual(migrateWorkspaceDir({ buildDir, name: 'feature/2520' }), {
+      wsDir: join(buildDir, 'feature-2520'),
+      migrated: false,
+    });
+
+    touch(join(buildDir, 'ws', '.metadata', 'marker'), 'y');
+    const blocked = migrateWorkspaceDir({ buildDir, name: 'other', running: true });
+    assert.equal(blocked.wsDir, join(buildDir, 'ws'));
+    assert.equal(blocked.blocked, 'running');
+    assert.equal(existsSync(join(buildDir, 'other')), false);
+
+    assert.deepEqual(migrateWorkspaceDir({ buildDir, name: 'ws' }), { wsDir: join(buildDir, 'ws'), migrated: false });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveWorkspaceTarget: имя каталога из снимка и предупреждение о старом ws', () => {
+  const dir = tempDir();
+  try {
+    const root = join(dir, 'wt');
+    const buildDir = join(root, 'build');
+    const snapshotFile = join(buildDir, 'workspace.json');
+    const named = join(buildDir, 'feature-2520');
+    touch(snapshotFile, JSON.stringify({ wsDir: named }));
+
+    let target = resolveWorkspaceTarget({ cwd: root, config: {}, repositories: [worktree(root)] });
+    assert.equal(target.wsDir, named);
+    assert.equal(target.wsName, 'feature-2520');
+    assert.equal(target.legacy, false);
+    assert.deepEqual(target.warnings, []);
+
+    touch(snapshotFile, JSON.stringify({ wsDir: join(buildDir, 'ws') }));
+    target = resolveWorkspaceTarget({ cwd: root, config: {}, repositories: [worktree(root)] });
+    assert.equal(target.wsName, 'ws');
+    assert.equal(target.legacy, true);
+    assert.match(target.warnings.join('\n'), /имя каталога workspace — ws/);
+
+    target = resolveWorkspaceTarget({ cwd: root, config: { workspace: { name: 'ws' } }, repositories: [worktree(root)] });
+    assert.equal(target.legacy, false, 'явное ws — это не legacy');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('prepareWorkspaceSnapshot: явный wsDir и имя из настройки', () => {
+  const dir = tempDir();
+  try {
+    projectDir(dir, 'src/cf');
+    const settings = normalizeWorkspaceSettings({});
+    const explicit = join(dir, 'build', 'feature-2520');
+    assert.equal(prepareWorkspaceSnapshot({ root: dir, settings, wsDir: explicit }).wsDir, explicit);
+    const named = prepareWorkspaceSnapshot({ root: dir, settings: normalizeWorkspaceSettings({ name: 'task 42' }) });
+    assert.equal(named.wsDir, join(dir, 'build', 'task-42'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('workspaceDirInBuild: только непосредственный ребёнок build, чужие пути отбрасываются', () => {
+  const dir = tempDir();
+  try {
+    const buildDir = join(dir, 'build');
+    assert.equal(workspaceDirInBuild(buildDir, 'feature-2520'), join(buildDir, 'feature-2520'));
+    assert.equal(workspaceDirInBuild(buildDir, join(buildDir, 'feature-2520')), join(buildDir, 'feature-2520'));
+    assert.equal(workspaceDirInBuild(buildDir, join(dir, 'other', 'ws')), undefined, 'чужой checkout');
+    assert.equal(workspaceDirInBuild(buildDir, '..'), undefined, 'выход из build');
+    assert.equal(workspaceDirInBuild(buildDir, join(buildDir, 'nested', 'ws')), undefined, 'не прямой ребёнок');
+    assert.equal(workspaceDirInBuild(buildDir, ''), undefined);
+
+    // Снимок из скопированного репозитория не должен выбирать чужой каталог.
+    const foreign = join(dir, 'foreign', 'ws');
+    touch(join(foreign, '.metadata', '.log'));
+    const plan = planWorkspaceDirs({ root: dir, settings: normalizeWorkspaceSettings({}), snapshot: { wsDir: foreign } });
+    assert.equal(plan.wsDir, join(buildDir, 'ws'), 'берём каталог этого worktree');
+    assert.equal(plan.legacy, false);
+
+    // И не должен переименовывать чужой каталог.
+    const moved = migrateWorkspaceDir({ buildDir, name: 'feature-2520', current: foreign });
+    assert.equal(moved.migrated, false);
+    assert.equal(moved.blocked, 'outside');
+    assert.equal(existsSync(foreign), true, 'чужой каталог цел');
+    assert.equal(moved.wsDir, join(buildDir, 'feature-2520'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

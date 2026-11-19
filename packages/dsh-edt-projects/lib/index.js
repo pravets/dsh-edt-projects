@@ -19,7 +19,7 @@
 // перезапуска DSH.
 //
 // Git worktree: включённость и настройки наследуются от основного checkout, а
-// окружение EDT поднимается своё — workspace в <worktree>/build/ws, свой порт и
+// окружение EDT поднимается своё — workspace в <worktree>/build/<ветка>, свой порт и
 // фоновый процесс (lib/workspace-run.mjs). Так параллельные worktree не делят
 // один workspace EDT; основной checkout продолжает работать с ручным сервером.
 //
@@ -47,27 +47,35 @@ import { createSkillsProvider, skillStates } from './skills.mjs';
 import { repositoriesUnder, repositoryAt, resolveContextCwd } from './repo.mjs';
 import {
   BUILD_DIR,
+  currentBranch,
   detectEdtHome,
+  filePath,
   formatElapsed,
   isPortOpen,
+  migrateWorkspaceDir,
   normalizeWorkspaceSettings,
   pickFreePort,
   pidAlive,
+  planWorkspaceDirs,
   prepareWorkspaceSnapshot,
   prefValue,
   probeHealth,
   readPort,
   readPrefs,
+  readWorkspaceSnapshot,
   removeStamp,
   requiredJava,
   resolveEdtVm,
   resolveWorkspaceTarget,
   stateOf as workspaceState,
   tailFile,
+  workspaceDirInBuild,
+  workspaceDirName,
   writePort,
   writeStamp,
+  writeWorkspaceSnapshot,
 } from './workspace.mjs';
-import { cmdInit, cmdStop as stopWorkspaceNow, lockState } from './workspace-run.mjs';
+import { acquireLock, cmdInit, cmdStop as stopWorkspaceNow, lockState, releaseLock } from './workspace-run.mjs';
 
 const HEADER = `## Работа с 1С через MCP
 
@@ -145,7 +153,7 @@ function workspaceRules(workspace) {
   return `
 ### Окружение EDT в worktree
 
-Сессия открыта в отдельном git worktree, поэтому у неё свой workspace EDT: ${workspace.wsDir}. Его поднимает плагин, отдельно от основного checkout.
+Сессия открыта в отдельном git worktree, поэтому у неё свой workspace EDT: ${workspace.wsDir}. Имя каталога (${workspace.wsName ?? 'ws'}) выводится в заголовке окна 1C:EDT — по нему окна разных worktree различимы. Его поднимает плагин, отдельно от основного checkout.
 
 - Первый запуск занимает 1–3 минуты, с импортом проектов — дольше. Готовность проверяй через \`edt_workspace\` (action=status): состояние \`ready\` и порт.
 - Инструменты \`mcp__edt__*\` появляются после готовности сервера. Если вызов не удался из-за соединения — проверь статус, не перезапускай окружение самовольно.
@@ -519,12 +527,21 @@ export async function apply(ctx, config) {
     }
     const current = workspaceState(plan.buildDir, deps);
     const phase = current.progress?.edt;
+    // Снимок авторитетен: после переезда со старого build/ws план в контексте
+    // мог остаться прежним, а статус должен показывать фактический каталог.
+    const dirs = planWorkspaceDirs({
+      root: plan.root,
+      settings: plan.settings,
+      snapshot: readWorkspaceSnapshot(plan.buildDir),
+    });
     return {
       state: 'worktree',
       status: current.label,
       root: plan.root,
       buildDir: plan.buildDir,
-      wsDir: plan.wsDir,
+      wsDir: dirs.wsDir,
+      wsName: dirs.wsName,
+      legacy: dirs.legacy,
       mainRoot: plan.mainRoot,
       port: current.port ?? undefined,
       pid: current.pid?.pid ?? undefined,
@@ -900,12 +917,48 @@ export async function apply(ctx, config) {
           port = await pickFreePort(plan.settings.ports);
           writePort(key, port);
         }
-        const workspaceSnapshot = prepareWorkspaceSnapshot({
-          root: plan.root,
-          mainRoot: plan.mainRoot,
-          settings: plan.settings,
-        });
-        if (options.import === true) workspaceSnapshot.forceImport = true;
+        // Имя каталога workspace задаёт заголовок окна EDT, поэтому его
+        // фиксируем здесь, один раз на старт. Переезд и снимок идут под тем же
+        // run-lock, который фоновый run берёт до чтения снимка: так запуск не
+        // увидит старый путь посреди переноса.
+        const branch = currentBranch(plan.root);
+        const wsName = workspaceDirName({ root: plan.root, settings: plan.settings, branch });
+        const guardLock = filePath(key, 'runLock');
+        const guardMaxAge = (Math.max(plan.settings.startTimeout, plan.settings.importTimeout) + 600) * 1000;
+        const guard = acquireLock(guardLock, { alive: cheapAlive, maxAgeMs: guardMaxAge });
+        let workspaceSnapshot;
+        try {
+          // Снимок мог приехать из скопированного checkout: чужой путь не
+          // используем даже для подготовки нового снимка.
+          let wsDir = workspaceDirInBuild(key, readWorkspaceSnapshot(key)?.wsDir) ?? plan.wsDir;
+          if (guard) {
+            // Состояние перечитываем перед переносом: между чтением в начале и
+            // этим местом были await-ы (порт, health), и EDT мог подняться.
+            const live = workspaceState(key, { alive: cheapAlive });
+            const running = live.pid?.pid !== undefined && cheapAlive(live.pid.pid);
+            const moved = migrateWorkspaceDir({ buildDir: key, name: wsName, current: wsDir, running });
+            wsDir = moved.wsDir;
+            if (moved.migrated) {
+              ctx.logger?.info?.(`mcp-hub: workspace EDT перенесён в ${moved.wsDir}`);
+            } else if (moved.blocked === 'outside') {
+              ctx.logger?.warn?.('mcp-hub: снимок указывает за пределы build — беру каталог этого worktree');
+            } else if (moved.blocked === 'exists') {
+              ctx.logger?.warn?.(`mcp-hub: каталог ${moved.wsDir} уже существует — workspace остаётся на нём`);
+            } else if (moved.blocked === 'error') {
+              ctx.logger?.warn?.(`mcp-hub: не удалось перенести workspace EDT: ${moved.error?.message ?? moved.error}`);
+            }
+          }
+          workspaceSnapshot = prepareWorkspaceSnapshot({
+            root: plan.root,
+            wsDir,
+            mainRoot: plan.mainRoot,
+            settings: plan.settings,
+          });
+          if (options.import === true) workspaceSnapshot.forceImport = true;
+          if (guard) writeWorkspaceSnapshot(key, workspaceSnapshot);
+        } finally {
+          if (guard) releaseLock(guardLock);
+        }
         const initLog = join(key, 'logs', 'init.log');
         const code = await cmdInit(plan.root, {}, { snapshot: workspaceSnapshot });
         if (code !== 0) {
@@ -1136,6 +1189,7 @@ export async function apply(ctx, config) {
     const settings = context.workspace?.settings ?? normalizeWorkspaceSettings(context.effective.config?.workspace, process.env);
     const root = isAbsolute(rootOverride) ? rootOverride : resolvePath(context.cwd, rootOverride);
     const buildDir = join(root, BUILD_DIR);
+    const dirs = planWorkspaceDirs({ root, settings, snapshot: readWorkspaceSnapshot(buildDir) });
     return {
       context,
       plan: {
@@ -1143,7 +1197,9 @@ export async function apply(ctx, config) {
         settings,
         root,
         buildDir,
-        wsDir: join(buildDir, 'ws'),
+        wsName: dirs.wsName,
+        wsDir: dirs.wsDir,
+        legacy: dirs.legacy,
         mainRoot: context.workspace?.mainRoot,
         warnings: context.workspace?.warnings ?? [],
       },
@@ -1164,6 +1220,7 @@ export async function apply(ctx, config) {
     const lines = [
       `Worktree: ${info.root}`,
       `Workspace EDT: ${info.wsDir}`,
+      `Имя workspace: ${info.wsName}${info.legacy ? ' (старое место, переедет при следующем старте с остановленным EDT)' : ''}`,
       `Состояние: ${info.status}${info.port === undefined ? '' : `, порт ${info.port}`}${info.pid === undefined ? '' : `, pid ${info.pid}`}`,
     ];
     if (info.phase !== undefined) {
@@ -1186,7 +1243,7 @@ export async function apply(ctx, config) {
     const importMode = info.settings.import;
     lines.push(`Импорт проектов: ${importMode === true ? 'да' : importMode === false ? 'нет' : 'авто (если workspace пуст)'}`);
     lines.push(`Plain text: ${info.settings.plainText === false ? 'нет' : 'да'}; скриншоты форм: ${info.settings.formScreenshots === false ? 'нет' : 'да'}`);
-    const prefsText = readPrefs(info.buildDir);
+    const prefsText = readPrefs(info.wsDir);
     const plainPref = prefsText === undefined ? undefined : prefValue(prefsText, 'mcpPlainTextMode');
     lines.push(
       `Plain text в prefs: ${prefsText === undefined ? 'файла ещё нет' : plainPref === undefined ? 'ключа нет' : plainPref === 'true' ? 'да' : 'нет'}`,
@@ -1207,7 +1264,7 @@ export async function apply(ctx, config) {
   const workspaceTool = () =>
     textTool(
       'edt_workspace',
-      'Manage the EDT workspace of this git worktree: action=status reports where build/ws is, whether EDT is ready, its port, phase and warnings; init starts it (or retries a failed start); stop stops the EDT process; restart stops and starts again, optionally re-importing projects; import imports EDT projects while EDT is stopped (it runs in the background).',
+      'Manage the EDT workspace of this git worktree: action=status reports where the workspace lives (its directory name is shown in the EDT window title), whether EDT is ready, its port, phase and warnings; init starts it (or retries a failed start); stop stops the EDT process; restart stops and starts again, optionally re-importing projects; import imports EDT projects while EDT is stopped (it runs in the background).',
       {
         action: {
           type: 'string',
@@ -1311,7 +1368,7 @@ export async function apply(ctx, config) {
               : `Каталог: исходный ${origin}, рабочий ${context.cwd}${context.workspaceOverride === true ? ' (через edt_workspace root)' : ''}`;
           const workspaceLine =
             workspace.state === 'worktree'
-              ? `EDT-окружение worktree: ${workspace.status}, порт ${workspace.port ?? '-'}, ${workspace.root}`
+              ? `EDT-окружение worktree: ${workspace.status}, порт ${workspace.port ?? '-'}, ${workspace.root}, workspace ${workspace.wsName ?? 'ws'}`
               : workspace.state === 'error'
                 ? `EDT-окружение worktree: ошибка — ${workspace.message}`
                 : 'EDT-окружение worktree: выключено (поднимается только в git worktree)';

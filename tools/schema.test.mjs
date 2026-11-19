@@ -174,12 +174,13 @@ test('порядок ключей стабилен: известные по сх
 });
 
 test('workspace: ключи в схеме, upgrade дописывает, import проверяется отдельно', () => {
-  assert.equal(CONFIG_VERSION, 4);
+  assert.equal(CONFIG_VERSION, 5);
   assert.deepEqual(DEFAULTS.workspace.ports, { min: 20000, max: 39999 });
   assert.equal(DEFAULTS.workspace.stopOnSessionEnd, true);
   for (const key of [
     'workspace.enabled',
     'workspace.root',
+    'workspace.name',
     'workspace.home.win32',
     'workspace.home.linux',
     'workspace.vm',
@@ -199,6 +200,8 @@ test('workspace: ключи в схеме, upgrade дописывает, import 
   const plan = planUpgrade({ version: 2 });
   assert.ok(plan.added.includes('workspace.enabled'));
   assert.ok(plan.added.includes('workspace.import'));
+  assert.ok(plan.added.includes('workspace.name'), 'upgrade добавляет имя каталога workspace');
+  assert.equal(DEFAULTS.workspace.name, '', 'пусто — имя по ветке');
   assert.ok(!plan.added.includes('version') || plan.version.from === 2);
 
   // import допускает true/false/"auto" и ничего больше.
@@ -214,6 +217,8 @@ test('workspace: ключи в схеме, upgrade дописывает, import 
 
   assert.ok(validateConfig({ workspace: { ports: { min: 30000, max: 20000 } } }).errors.some((line) => line.includes('ports')));
   assert.ok(validateConfig({ workspace: { startTimeout: 0 } }).errors.some((line) => line.includes('workspace.startTimeout')));
+  assert.ok(validateConfig({ workspace: { name: 42 } }).errors.some((line) => line.includes('workspace.name')));
+  assert.deepEqual(validateConfig({ workspace: { name: 'feature-2520' } }).errors, []);
   assert.ok(validateConfig({ workspace: { projects: 'src/cf' } }).errors.some((line) => line.includes('workspace.projects')));
 });
 

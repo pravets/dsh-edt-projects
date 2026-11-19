@@ -19,6 +19,7 @@ import {
   readdirSync,
   readlinkSync,
   readSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -61,10 +62,9 @@ const text = (value) => (typeof value === 'string' && value.trim() !== '' ? valu
 export const filePath = (buildDir, key) => path.join(buildDir, FILE_NAMES[key]);
 
 /** Путь к prefs MCP-сервера EDT внутри workspace. */
-export function prefsPath(buildDir) {
+export function prefsPath(wsDir) {
   return path.join(
-    buildDir,
-    'ws',
+    wsDir,
     '.metadata',
     '.plugins',
     'org.eclipse.core.runtime',
@@ -74,8 +74,8 @@ export function prefsPath(buildDir) {
 }
 
 /** Каталог, где EDT хранит зарегистрированные проекты workspace. */
-export function registeredProjectsDir(buildDir) {
-  return path.join(buildDir, 'ws', '.metadata', '.plugins', 'org.eclipse.core.resources', '.projects');
+export function registeredProjectsDir(wsDir) {
+  return path.join(wsDir, '.metadata', '.plugins', 'org.eclipse.core.resources', '.projects');
 }
 
 /**
@@ -107,6 +107,7 @@ export function normalizeWorkspaceSettings(raw = {}, env = process.env) {
   return {
     enabled: pick('enabled', defaults.enabled) !== false,
     root: text(value.root) ?? '',
+    name: text(value.name) ?? '',
     home: {
       win32: text(value.home?.win32) ?? '',
       linux: text(value.home?.linux) ?? '',
@@ -123,6 +124,173 @@ export function normalizeWorkspaceSettings(raw = {}, env = process.env) {
     plainText: pick('plainText', defaults.plainText) !== false,
     formScreenshots: pick('formScreenshots', defaults.formScreenshots) !== false,
   };
+}
+
+/** Имя каталога workspace старого образца: `build/ws`. */
+export const LEGACY_WS_NAME = 'ws';
+
+/** Имена, занятые служебными файлами и каталогами внутри `build`. */
+const RESERVED_WS_NAMES = new Set([...Object.values(FILE_NAMES), 'logs']);
+
+/** Устройства Windows: такие имена каталогов запрещены. */
+const WINDOWS_DEVICE_NAMES = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`),
+]);
+
+/** Предел имени: заголовок окна EDT и путь Windows остаются короткими. */
+const MAX_WS_NAME = 40;
+
+/**
+ * Безопасное имя каталога workspace и строки в заголовке окна EDT.
+ *
+ * Буквы и цифры любых алфавитов сохраняются (кириллические ветки остаются
+ * читаемыми), остальное заменяется на `-`. Разделители пути схлопываются,
+ * поэтому `workspace.name` не может вывести каталог за пределы `build`.
+ * Пустая строка — сигнал «имя не годится», выбор fallback делает вызывающий.
+ */
+export function sanitizeWorkspaceName(value) {
+  const raw = text(value);
+  if (raw === undefined) return '';
+  const replaced = raw
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{N}._-]+/gu, '-')
+    .replace(/-{2,}/g, '-');
+  const trimmed = replaced.replace(/^[-._]+/, '').replace(/[-._]+$/, '');
+  if (trimmed === '') return '';
+  let name = [...trimmed].slice(0, MAX_WS_NAME).join('').replace(/[-._]+$/, '');
+  if (name === '') return '';
+  const lower = name.toLowerCase();
+  const device = lower.split('.')[0];
+  if (RESERVED_WS_NAMES.has(lower) || WINDOWS_DEVICE_NAMES.has(device)) name = `ws-${name}`;
+  return name;
+}
+
+/**
+ * Ветка, развёрнутая в worktree, — через git. Вызывается редко: при создании
+ * окружения и в статусе ещё не созданного. Ошибка git или detached HEAD дают
+ * `undefined`: имя тогда берётся из каталога worktree.
+ */
+export function currentBranch(root, { run = execFileSync } = {}) {
+  if (typeof root !== 'string' || root.trim() === '') return undefined;
+  let output;
+  try {
+    output = run('git', ['-C', root, 'branch', '--show-current'], { encoding: 'utf8', windowsHide: true });
+  } catch {
+    return undefined;
+  }
+  const branch = String(output ?? '')
+    .replace(/^\uFEFF/, '')
+    .trim();
+  return branch === '' ? undefined : branch;
+}
+
+/** realpath, но для отсутствующего пути — сам путь. */
+function realOrSelf(value) {
+  try {
+    return realpathSync.native(value);
+  } catch {
+    return value;
+  }
+}
+
+/** Один и тот же каталог (Windows — без учёта регистра, симлинки раскрыты). */
+function sameDir(left, right) {
+  const a = realOrSelf(path.resolve(left));
+  const b = realOrSelf(path.resolve(right));
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * Каталог workspace, только если это непосредственный ребёнок `build`.
+ *
+ * Снимок может приехать из скопированного репозитория и указывать на чужой
+ * checkout: такой путь нельзя ни переименовывать, ни использовать.
+ * @returns {string|undefined} нормализованный путь или undefined.
+ */
+export function workspaceDirInBuild(buildDir, value) {
+  const raw = text(value);
+  if (raw === undefined) return undefined;
+  const resolved = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(buildDir, raw);
+  return sameDir(path.dirname(resolved), buildDir) ? resolved : undefined;
+}
+
+/**
+ * Имя каталога workspace: явная настройка → ветка → имя каталога worktree →
+ * старое `ws`.
+ *//**
+ * Имя каталога workspace: явная настройка → ветка → имя каталога worktree →
+ * старое `ws`.
+ */
+export function workspaceDirName({ root, settings, branch } = {}) {
+  const configured = sanitizeWorkspaceName(settings?.name);
+  if (configured !== '') return configured;
+  const fromBranch = sanitizeWorkspaceName(branch);
+  if (fromBranch !== '') return fromBranch;
+  const fromRoot = sanitizeWorkspaceName(typeof root === 'string' ? path.basename(path.resolve(root)) : undefined);
+  return fromRoot === '' ? LEGACY_WS_NAME : fromRoot;
+}
+
+/**
+ * Каталог workspace для уже созданного окружения и для ещё не созданного.
+ *
+ * Снимок `build/workspace.json` — авторитетный источник: имя фиксируется при
+ * создании окружения. Пока снимка нет, берётся явная настройка (если задана)
+ * или старое `build/ws`; имя ветки — забота `ensureWorkspace`/`cmdInit`,
+ * поэтому здесь git не вызывается.
+ * @returns {{ buildDir: string, wsName: string, wsDir: string, legacy: boolean }}
+ */
+export function planWorkspaceDirs({ root, settings, snapshot } = {}) {
+  const buildDir = path.join(root, BUILD_DIR);
+  const configured = sanitizeWorkspaceName(settings?.name);
+  const saved = workspaceDirInBuild(buildDir, snapshot?.wsDir);
+  if (saved !== undefined) {
+    const wsName = path.basename(saved);
+    return { buildDir, wsName, wsDir: saved, legacy: wsName === LEGACY_WS_NAME && configured !== LEGACY_WS_NAME };
+  }
+
+  const legacyDir = path.join(buildDir, LEGACY_WS_NAME);
+  if (existsSync(legacyDir)) {
+    // Окружение уже есть в старом месте — переезд произойдёт при старте,
+    // поэтому план (и статус) показывает фактический каталог.
+    return { buildDir, wsName: LEGACY_WS_NAME, wsDir: legacyDir, legacy: configured !== LEGACY_WS_NAME };
+  }
+  const wsName = configured === '' ? LEGACY_WS_NAME : configured;
+  return { buildDir, wsName, wsDir: path.join(buildDir, wsName), legacy: false };
+}
+
+/**
+ * Переименовывает старое `build/ws` в каталог с именем ветки.
+ *
+ * Только при остановленном EDT: запущенный Eclipse держит файлы workspace.
+ * Любая ошибка ФС (файл занят, нет прав) оставляет окружение на старом месте,
+ * чтобы подъём не сломался.
+ * @returns {{ wsDir: string, migrated: boolean, blocked?: 'running'|'error', error?: Error }}
+ */
+export function migrateWorkspaceDir({ buildDir, name, current, running = false } = {}) {
+  const target = sanitizeWorkspaceName(name) || LEGACY_WS_NAME;
+  const desired = path.join(buildDir, target);
+  const saved = text(current);
+  const inside = workspaceDirInBuild(buildDir, saved);
+  if (saved !== undefined && inside === undefined) {
+    // Путь из чужого checkout (например, build скопировали целиком): не трогаем.
+    return { wsDir: desired, migrated: false, blocked: 'outside' };
+  }
+  const currentDir = inside ?? path.join(buildDir, LEGACY_WS_NAME);
+  if (path.basename(currentDir) === target) return { wsDir: currentDir, migrated: false };
+  if (!existsSync(currentDir)) return { wsDir: desired, migrated: false };
+  if (existsSync(desired)) return { wsDir: desired, migrated: false, blocked: 'exists' };
+  if (running === true) return { wsDir: currentDir, migrated: false, blocked: 'running' };
+  try {
+    renameSync(currentDir, desired);
+    return { wsDir: desired, migrated: true };
+  } catch (error) {
+    return { wsDir: currentDir, migrated: false, blocked: 'error', error };
+  }
 }
 
 /**
@@ -164,6 +332,15 @@ export function resolveWorkspaceTarget({ cwd, config, repositories = [], env = p
         ? path.normalize(configured)
         : path.resolve(repo.root, configured);
   const buildDir = path.join(root, BUILD_DIR);
+  // Имя каталога workspace определяет заголовок окна EDT, поэтому оно
+  // фиксируется при создании окружения и хранится в снимке. Здесь только
+  // читаем снимок и не зовём git — функция работает на каждом шаге промпта.
+  const dirs = planWorkspaceDirs({ root, settings, snapshot: readWorkspaceSnapshot(buildDir) });
+  if (dirs.legacy) {
+    warnings.push(
+      'имя каталога workspace — ws (окружение старого образца); при следующем старте с остановленным EDT он переедет в каталог с именем ветки, если задать workspace.name — в каталог с этим именем',
+    );
+  }
 
   return {
     state: 'ok',
@@ -172,7 +349,9 @@ export function resolveWorkspaceTarget({ cwd, config, repositories = [], env = p
     mainRoot: repo.mainRoot,
     root,
     buildDir,
-    wsDir: path.join(buildDir, 'ws'),
+    wsName: dirs.wsName,
+    wsDir: dirs.wsDir,
+    legacy: dirs.legacy,
     isWorktree: true,
     rootSource: configured === '' ? 'repo' : 'config',
     warnings,
@@ -354,13 +533,13 @@ function disabledToolsWith(current, tool) {
 }
 
 /** Содержимое prefs EDT-MCP этого workspace (undefined — файла нет). */
-export function readPrefs(buildDir) {
-  return readText(prefsPath(buildDir));
+export function readPrefs(wsDir) {
+  return readText(prefsPath(wsDir));
 }
 
 /** prefs, включающие MCP-сервер EDT на нужном порту при старте. */
-export function writePrefs(buildDir, port, options = {}) {
-  const file = prefsPath(buildDir);
+export function writePrefs(wsDir, port, options = {}) {
+  const file = prefsPath(wsDir);
   mkdirSync(path.dirname(file), { recursive: true });
   const current = existsSync(file) ? readFileSync(file, 'utf8') : '';
   const values = {
@@ -518,8 +697,12 @@ export function readImported(buildDir) {
   return readJson(filePath(buildDir, 'imported')) ?? null;
 }
 
-export function writeImported(buildDir, projects, now = new Date()) {
-  atomicWrite(filePath(buildDir, 'imported'), JSON.stringify({ projects, at: now.toISOString() }));
+export function writeImported(buildDir, projects, { wsDir, now = new Date() } = {}) {
+  // Каталог workspace входит в маркер: после переезда в build/<ветка> старый
+  // маркер не должен убеждать, что проекты уже импортированы.
+  const marker = { projects, at: now.toISOString() };
+  if (typeof wsDir === 'string' && wsDir !== '') marker.wsDir = wsDir;
+  atomicWrite(filePath(buildDir, 'imported'), JSON.stringify(marker));
 }
 
 /** Прогресс подъёма: `{ startedAt, edt: { phase, since, updated, detail } }`. */
@@ -630,8 +813,8 @@ export function parseImportProgress(text, total = 0) {
 }
 
 /** Свежий кусок metadata-лога, прогресс импорта и полезные строки. */
-export function importDigest(buildDir, offset, total, deps = {}) {
-  const file = path.join(buildDir, 'ws', '.metadata', '.log');
+export function importDigest(wsDir, offset, total, deps = {}) {
+  const file = path.join(wsDir, '.metadata', '.log');
   const { text, offset: next } = (deps.readFromOffset ?? readFromOffset)(file, offset);
   const progress = parseImportProgress(text, total);
   const lines = text
@@ -691,13 +874,16 @@ export function readWorkspaceSnapshot(buildDir) {
  * Пишется один раз перед подъёмом; фоновый процесс читает его, а не настройки
  * плагина — так окружение поднимается ровно по тому, что было в момент старта.
  */
-export function prepareWorkspaceSnapshot({ root, mainRoot, settings, patterns, now = new Date() }) {
+export function prepareWorkspaceSnapshot({ root, mainRoot, settings, patterns, wsDir, now = new Date() }) {
   const buildDir = path.join(root, BUILD_DIR);
   const projects = discoverProjects(root, patterns ?? settings?.projects ?? []);
+  // Имя уже посчитал вызывающий (после миграции). Без него — явная настройка
+  // или старое `ws`; git здесь не нужен, поэтому ветку не спрашиваем.
+  const dirs = planWorkspaceDirs({ root, settings, snapshot: undefined });
   return buildWorkspaceSnapshot({
     root,
     buildDir,
-    wsDir: path.join(buildDir, 'ws'),
+    wsDir: wsDir ?? dirs.wsDir,
     mainRoot,
     settings,
     projects,
