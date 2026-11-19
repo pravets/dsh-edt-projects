@@ -10,6 +10,30 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-19
+
+### Изменено
+
+- **DSH 0.2.2-rc.5.** Бандл объявляет `engines.dsh: "0.2.2-rc.5"`: DSH проверяет
+  совместимость при установке и на старте и отказывает чужой версии вместо тихой
+  работы. `@deepseek-ai/dsh-mcp-client` переехал из `dependencies` в
+  `peerDependencies` + `devDependencies` с пином `0.2.2-rc.5`: в профиле больше нет
+  второй копии клиента (0.2.1 рядом с 0.2.2 хоста), плагин монтирует экземпляр хоста.
+- `mountConfig` пропускает новые поля mcp-client `startupTimeoutMs`, `closeTimeoutMs`
+  и `expandTemplates`; ключи описаны в схеме и не попадают в `edt_config upgrade`.
+- `edt_servers` показывает состояние соединения (`connected`, `reconnecting`,
+  `failed`, …) из `connectionStatusOf` mcp-client 0.2.2.
+- `validate-bundle` проверяет `engines.dsh` и что mcp-client объявлен peer+dev;
+  smoke берёт версию DSH из манифеста и проверяет, что бандл не тянет свою копию
+  mcp-client; CI больше не дублирует версию DSH.
+
+### Проверки
+
+- `npm test` — 231 тест;
+- `npm run validate` — 18 проверок без замечаний;
+- `npm run pack:check` — 23 файла в пакете;
+- `npm run smoke` — прогон бандла в одноразовом профиле DSH 0.2.2-rc.5.
+
 ## [0.14.0] - 2026-11-17
 
 ### Добавлено

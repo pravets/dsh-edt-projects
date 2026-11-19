@@ -115,6 +115,30 @@ if (manifest) {
     pass(`версии согласованы: ${versionSources.map(([where]) => where).join(', ')} — ${manifest.version}`);
   }
 
+  // --- совместимость с DSH ---------------------------------------------------
+  // DSH 0.2.2+ читает engines.dsh при установке и на каждом старте. mcp-client —
+  // общий с хостом экземпляр: в dependencies он дал бы вторую копию в профиле.
+  const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client';
+  const dshRange = manifest.engines?.dsh;
+  const exactSemver = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+  if (typeof dshRange !== 'string' || dshRange.trim() === '') {
+    fail('package.json: нет engines.dsh — DSH не проверит совместимость бандла');
+  } else if (!exactSemver.test(dshRange)) {
+    fail(`package.json: engines.dsh «${dshRange}» — ожидалась точная SemVer-версия`);
+  } else {
+    const peer = manifest.peerDependencies?.[MCP_CLIENT];
+    const dev = manifest.devDependencies?.[MCP_CLIENT];
+    if (manifest.dependencies?.[MCP_CLIENT] !== undefined) {
+      fail(`package.json: ${MCP_CLIENT} в dependencies — в профиле появится вторая копия; нужен peer+dev`);
+    } else if (peer === undefined || dev === undefined) {
+      fail(`package.json: ${MCP_CLIENT} должен быть в peerDependencies и devDependencies`);
+    } else if (peer !== dshRange || dev !== dshRange) {
+      fail(`версии расходятся: engines.dsh ${dshRange}, peer ${peer}, dev ${dev}`);
+    } else {
+      pass(`совместимость: DSH ${dshRange}, ${MCP_CLIENT} — peer+dev`);
+    }
+  }
+
   // npm отклоняет приватный пакет, а без README/LICENSE публикация выходит неполной.
   if (manifest.private === true) fail('package.json: "private": true — такой пакет npm publish отклонит');
   else pass('пакет публикуемый (private не задан)');

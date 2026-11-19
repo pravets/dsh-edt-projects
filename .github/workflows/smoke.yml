@@ -27,9 +27,6 @@ jobs:
   smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      # Версия DSH, с которой проверяется бандл. Поднимать вместе с обновлением DSH.
-      DSH_VERSION: 0.2.1-rc.5
     steps:
       - uses: actions/checkout@v5
 
@@ -37,6 +34,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Версия DSH из engines.dsh
+        run: |
+          version=$(node -p "require('./packages/dsh-edt-projects/package.json').engines.dsh")
+          echo "DSH_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Зависимости репозитория
         run: npm ci
