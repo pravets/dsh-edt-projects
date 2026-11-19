@@ -354,42 +354,42 @@ export async function cmdInit(root, args = {}, deps = {}) {
     const initRunLock = filePath(buildDir, 'runLock');
     const guard = acquireLock(initRunLock, { ...deps, maxAgeMs, image: path.basename(process.execPath) });
     try {
-      if (guard) {
-        if (deps.snapshot === undefined) {
-          const alive = deps.alive ?? ((pid) => pidAlive(pid, ['1cedt']));
-          const runningPid = readPid(buildDir)?.pid;
-          const branch = (deps.currentBranch ?? currentBranch)(root, { run: deps.run });
-          const name = workspaceDirName({ root, settings: snapshot.settings, branch });
-          // Источник переезда — фактический каталог из файлов, а не план,
-          // прочитанный до ожиданий: он мог устареть.
-          const current = readWorkspaceSnapshot(buildDir)?.wsDir ?? snapshot.wsDir;
-          const moved = migrateWorkspaceDir({
-            buildDir,
-            name,
-            current,
-            running: runningPid !== undefined && alive(runningPid),
-          });
-          snapshot = { ...snapshot, wsDir: moved.wsDir };
-          if (moved.migrated) {
-            logTo(buildDir, `init: workspace перенесён в ${path.basename(moved.wsDir)}`);
-          } else if (moved.blocked === 'running') {
-            logTo(buildDir, 'init: EDT запущен — workspace остаётся на старом месте');
-          } else if (moved.blocked === 'outside') {
-            logTo(buildDir, 'init: снимок указывает за пределы build — беру каталог этого worktree');
-          } else if (moved.blocked === 'exists') {
-            logTo(buildDir, `init: каталог ${path.basename(moved.wsDir)} уже существует — остаюсь на нём`);
-          } else if (moved.blocked === 'error') {
-            logTo(buildDir, `init: не удалось переименовать workspace (${moved.error?.message ?? moved.error}) — продолжаю на старом месте`);
-          }
-        }
-      } else {
-        // Кто-то уже начал запуск: не двигаем каталог, берём фактический путь.
-        snapshot = {
-          ...snapshot,
-          wsDir: planWorkspaceDirs({ root, settings: snapshot.settings, snapshot: readWorkspaceSnapshot(buildDir) }).wsDir,
-        };
+      if (!guard) {
+        // Запуск уже начался между проверкой и захватом: каталог не двигаем и
+        // снимок не перезаписываем, иначе затрём чужой новый путь.
+        logTo(buildDir, 'init: параллельный подъём уже идёт, выходим');
+        return 4;
       }
-      // Снимок пишется после переезда: фоновый run читает каталог только из него.
+      // Под локом путь берём из файла: соседний процесс мог только что
+      // переехать каталог, а переданный снимок (и план) ещё помнят старый.
+      const stored = workspaceDirInBuild(buildDir, readWorkspaceSnapshot(buildDir)?.wsDir);
+      if (stored !== undefined) snapshot = { ...snapshot, wsDir: stored };
+
+      if (deps.snapshot === undefined) {
+        const alive = deps.alive ?? ((pid) => pidAlive(pid, ['1cedt']));
+        const runningPid = readPid(buildDir)?.pid;
+        const branch = (deps.currentBranch ?? currentBranch)(root, { run: deps.run });
+        const name = workspaceDirName({ root, settings: snapshot.settings, branch });
+        const moved = migrateWorkspaceDir({
+          buildDir,
+          name,
+          current: snapshot.wsDir,
+          running: runningPid !== undefined && alive(runningPid),
+        });
+        snapshot = { ...snapshot, wsDir: moved.wsDir };
+        if (moved.migrated) {
+          logTo(buildDir, `init: workspace перенесён в ${path.basename(moved.wsDir)}`);
+        } else if (moved.blocked === 'running') {
+          logTo(buildDir, 'init: EDT запущен — workspace остаётся на старом месте');
+        } else if (moved.blocked === 'outside') {
+          logTo(buildDir, 'init: снимок указывает за пределы build — беру каталог этого worktree');
+        } else if (moved.blocked === 'exists') {
+          logTo(buildDir, `init: каталог ${path.basename(moved.wsDir)} уже существует — остаюсь на нём`);
+        } else if (moved.blocked === 'error') {
+          logTo(buildDir, `init: не удалось переименовать workspace (${moved.error?.message ?? moved.error}) — продолжаю на старом месте`);
+        }
+      }
+      // Снимок пишется только под run-lock: фоновый run читает каталог из него.
       writeWorkspaceSnapshot(buildDir, snapshot);
     } finally {
       if (guard) releaseLock(initRunLock);

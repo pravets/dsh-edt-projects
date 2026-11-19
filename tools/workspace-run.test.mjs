@@ -780,3 +780,30 @@ test('cmdInit: чужой wsDir в переданном снимке не исп
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('cmdInit: путь из файла главнее переданного снимка', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const alpha = join(buildDir, 'alpha');
+    const beta = join(buildDir, 'beta');
+    mkdirSync(alpha, { recursive: true });
+    mkdirSync(beta, { recursive: true });
+    writeWorkspaceSnapshot(buildDir, { ...snapshotFor(root), wsDir: beta });
+    const passed = { ...snapshotFor(root), wsDir: alpha };
+
+    const code = await cmdInit(root, {}, {
+      snapshot: passed,
+      pickFreePort: async () => 23456,
+      isPortFree: async () => true,
+      spawnDetached: () => ({ pid: 111 }),
+    });
+    assert.equal(code, 0);
+    const saved = JSON.parse(readFileSync(join(buildDir, 'workspace.json'), 'utf8'));
+    assert.equal(saved.wsDir, beta, 'соседний процесс уже переехал — берём его путь');
+    assert.equal(existsSync(prefsPath(beta)), true);
+    assert.equal(existsSync(prefsPath(alpha)), false, 'пустой старый каталог не трогаем');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
