@@ -757,3 +757,26 @@ test('lockState: срок жизни задаёт владелец lock, а не
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('cmdInit: чужой wsDir в переданном снимке не используется', async () => {
+  const root = tempRoot();
+  try {
+    const buildDir = join(root, 'build');
+    const foreign = join(root, 'foreign', 'ws');
+    mkdirSync(foreign, { recursive: true });
+    const snapshot = { ...snapshotFor(root), wsDir: foreign };
+    const code = await cmdInit(root, {}, {
+      snapshot,
+      pickFreePort: async () => 23456,
+      isPortFree: async () => true,
+      spawnDetached: () => ({ pid: 111 }),
+    });
+    assert.equal(code, 0);
+    const saved = JSON.parse(readFileSync(join(buildDir, 'workspace.json'), 'utf8'));
+    assert.equal(saved.wsDir, join(buildDir, 'ws'), 'взят каталог этого worktree');
+    assert.equal(existsSync(foreign), true, 'чужой каталог не тронут');
+    assert.match(readFileSync(prefsPath(join(buildDir, 'ws')), 'utf8'), /mcpServerPort=23456/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

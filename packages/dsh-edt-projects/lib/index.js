@@ -69,6 +69,7 @@ import {
   resolveWorkspaceTarget,
   stateOf as workspaceState,
   tailFile,
+  workspaceDirInBuild,
   workspaceDirName,
   writePort,
   writeStamp,
@@ -927,7 +928,9 @@ export async function apply(ctx, config) {
         const guard = acquireLock(guardLock, { alive: cheapAlive, maxAgeMs: guardMaxAge });
         let workspaceSnapshot;
         try {
-          let wsDir = readWorkspaceSnapshot(key)?.wsDir ?? plan.wsDir;
+          // Снимок мог приехать из скопированного checkout: чужой путь не
+          // используем даже для подготовки нового снимка.
+          let wsDir = workspaceDirInBuild(key, readWorkspaceSnapshot(key)?.wsDir) ?? plan.wsDir;
           if (guard) {
             // Состояние перечитываем перед переносом: между чтением в начале и
             // этим местом были await-ы (порт, health), и EDT мог подняться.

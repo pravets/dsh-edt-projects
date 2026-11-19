@@ -51,6 +51,7 @@ import {
   resolveEdtVm,
   stateOf,
   tailFile,
+  workspaceDirInBuild,
   workspaceDirName,
   writeImported,
   writePid,
@@ -316,6 +317,13 @@ export async function cmdInit(root, args = {}, deps = {}) {
   let snapshot = deps.snapshot ?? readWorkspaceSnapshot(path.join(root, 'build')) ?? defaultSnapshot(root);
   const buildDir = snapshot.buildDir;
   mkdirSync(buildDir, { recursive: true });
+  if (snapshot.wsDir !== undefined && workspaceDirInBuild(buildDir, snapshot.wsDir) === undefined) {
+    // Путь из чужого checkout (build скопировали целиком) не используем.
+    snapshot = {
+      ...snapshot,
+      wsDir: planWorkspaceDirs({ root, settings: snapshot.settings, snapshot: readWorkspaceSnapshot(buildDir) }).wsDir,
+    };
+  }
 
   const lock = filePath(buildDir, 'lock');
   if (!acquireLock(lock, deps)) {
