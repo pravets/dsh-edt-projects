@@ -184,6 +184,17 @@ test('mountConfig не оставляет undefined-поля', () => {
   assert.deepEqual(Object.keys(config).sort(), ['serverName', 'transport', 'url']);
 });
 
+test('mountConfig прокидывает поля mcp-client 0.2.2', () => {
+  const config = mountConfig({
+    name: 'edt',
+    transport: 'streamable-http',
+    raw: { url: 'http://x/mcp', startupTimeoutMs: 15000, closeTimeoutMs: 1000, expandTemplates: true },
+  });
+  assert.equal(config.startupTimeoutMs, 15000);
+  assert.equal(config.closeTimeoutMs, 1000);
+  assert.equal(config.expandTemplates, true);
+});
+
 test('окружение worktree: блок про имя workspace и edt_workspace', () => {
   const workspace = {
     state: 'worktree',

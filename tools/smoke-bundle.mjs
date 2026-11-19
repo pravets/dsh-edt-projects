@@ -76,6 +76,39 @@ function readHubRow() {
   throw new Error(`в cordis.patch.yml нет строки бандла ${manifest.name}`);
 }
 
+function readManifest() {
+  return JSON.parse(readFileSync(join(root, 'packages', 'dsh-edt-projects', 'package.json'), 'utf8'));
+}
+
+/** В профиле у бандла не должно быть своей копии mcp-client: он живёт как peer хоста. */
+function checkNoSecondMcpClient(home, dshVersion) {
+  const lockPath = join(home, 'profiles', 'headless', 'pnpm-lock.yaml');
+  if (!existsSync(lockPath)) {
+    fail('в профиле нет pnpm-lock.yaml — не удалось проверить копию mcp-client');
+    return;
+  }
+  const lock = parseYaml(readFileSync(lockPath, 'utf8')) ?? {};
+  const version = lock.importers?.['.']?.dependencies?.['dsh-edt-projects']?.version;
+  if (typeof version !== 'string') {
+    fail('в lock профиля нет зависимости dsh-edt-projects');
+    return;
+  }
+  // У tarball-зависимости ключ — file:…; у версии из npm — просто 0.15.0.
+  const key = `dsh-edt-projects@${version}`;
+  const pkg = lock.packages?.[key];
+  const snapshot = lock.snapshots?.[key] ?? {};
+  if (pkg === undefined && lock.snapshots?.[key] === undefined) {
+    fail(`в lock профиля нет записи ${key}`);
+    return;
+  }
+  const own = snapshot.dependencies?.['@deepseek-ai/dsh-mcp-client'] ?? pkg?.dependencies?.['@deepseek-ai/dsh-mcp-client'];
+  const peer = pkg?.peerDependencies?.['@deepseek-ai/dsh-mcp-client'];
+  if (own !== undefined) fail(`${key} тянет @deepseek-ai/dsh-mcp-client@${own} — вторая копия вместо peer`);
+  else if (peer === undefined) fail(`${key}: @deepseek-ai/dsh-mcp-client не объявлен peer-зависимостью`);
+  else if (peer !== dshVersion) fail(`${key}: peer mcp-client ${peer} не совпадает с engines.dsh ${dshVersion}`);
+  else console.log(`  ok   ${key}: mcp-client — peer ${peer}, своей копии нет`);
+}
+
 function findTarball() {
   const dist = join(root, 'dist');
   if (!existsSync(dist)) throw new Error('нет dist/ — сначала соберите tarball (npm pack --workspace dsh-edt-projects --pack-destination dist)');
@@ -91,6 +124,16 @@ function findTarball() {
 async function main() {
   const bin = dshBin();
   if (!bin) throw new Error('не найден @deepseek-ai/dsh: задайте DSH_BIN или установите пакет');
+
+  // Версия DSH — из манифеста бандла: engines.dsh и есть контракт совместимости.
+  const manifest = readManifest();
+  const expectedDsh = manifest.engines?.dsh;
+  if (typeof expectedDsh !== 'string' || expectedDsh.trim() === '') throw new Error('в package.json бандла нет engines.dsh');
+  const installed = JSON.parse(readFileSync(join(dirname(bin), '..', 'package.json'), 'utf8'));
+  if (installed.version !== expectedDsh) {
+    throw new Error(`DSH ${installed.version} не совпадает с engines.dsh ${expectedDsh}: обновите DSH или пин в манифесте`);
+  }
+  console.log(`DSH: ${installed.version} (engines.dsh)`);
 
   const hub = readHubRow();
   const tarball = findTarball();
@@ -118,6 +161,7 @@ async function main() {
   // 2. Установка бандла из tarball — ровно тем же путём, что и у пользователя.
   console.log('[2/5] устанавливаю бандл из tarball');
   run(['plugin', '--profile', 'headless', 'add', tarball], { env, label: 'dsh plugin add' });
+  checkNoSecondMcpClient(home, expectedDsh);
 
   // 3. Композиция профиля: строка плагина правил и строка сервера должны быть в дереве.
   console.log('[3/5] проверяю композицию профиля');

@@ -271,6 +271,9 @@ test('workspace: plainText/formScreenshots и ключи серверов из c
     'servers.bsl.env',
     'servers.bsl.cwd',
     'servers.bsl.maxInstructionBytes',
+    'servers.edt.startupTimeoutMs',
+    'servers.edt.closeTimeoutMs',
+    'servers.edt.expandTemplates',
   ]) {
     assert.equal(isKnownPath(key), true, key);
   }
@@ -284,6 +287,9 @@ test('workspace: plainText/formScreenshots и ключи серверов из c
         url: 'http://127.0.0.1:8765/mcp',
         headers: {},
         toolCallTimeoutMs: 900000,
+        startupTimeoutMs: 15000,
+        closeTimeoutMs: 1000,
+        expandTemplates: false,
         failOnStartupError: false,
         reconnect: { enabled: true, initialDelayMs: 1000, maxDelayMs: 30000, maxAttempts: 1000 },
       },

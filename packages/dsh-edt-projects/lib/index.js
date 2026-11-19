@@ -290,6 +290,9 @@ export function mountConfig(entry) {
   const common = {
     serverName: entry.name,
     toolCallTimeoutMs: raw.toolCallTimeoutMs,
+    startupTimeoutMs: raw.startupTimeoutMs,
+    closeTimeoutMs: raw.closeTimeoutMs,
+    expandTemplates: raw.expandTemplates,
     failOnStartupError: raw.failOnStartupError,
     maxInstructionBytes: raw.maxInstructionBytes,
     reconnect: raw.reconnect,
@@ -594,7 +597,7 @@ export async function apply(ctx, config) {
     const map = mapFor(agent);
     let item = map.get(entry.name);
     if (item === undefined) {
-      item = { entry, fiber: null, error: null, supervisor: null, signature: undefined, suppressed: false };
+      item = { entry, fiber: null, error: null, supervisor: null, signature: undefined, suppressed: false, statusOf: undefined };
       map.set(entry.name, item);
     } else {
       item.entry = entry;
@@ -611,6 +614,15 @@ export async function apply(ctx, config) {
         .filter((toolName) => toolName.startsWith(prefix));
     } catch {
       return [];
+    }
+  };
+
+  /** Состояние соединения из mcp-client 0.2.2+; undefined, если хендл недоступен. */
+  const connectionOf = (item) => {
+    try {
+      return item?.statusOf?.(item.fiber)?.state;
+    } catch {
+      return undefined;
     }
   };
 
@@ -636,6 +648,7 @@ export async function apply(ctx, config) {
         root: item?.supervisor?.root ?? entry.raw?.root,
         endpoint: item?.supervisor?.url ?? entry.raw?.url,
         tools: toolNamesOf(agent, entry.name).length,
+        connection: connectionOf(item),
         error: item?.error,
         workspace: entry.name === 'edt' ? workspace : undefined,
       };
@@ -651,6 +664,7 @@ export async function apply(ctx, config) {
     item.supervisor = null;
     item.error = null;
     item.signature = undefined;
+    item.statusOf = undefined;
   };
 
   const mount = async (agent, serverName, options = {}) => {
@@ -720,6 +734,8 @@ export async function apply(ctx, config) {
     }
 
     const McpClient = await import('@deepseek-ai/dsh-mcp-client');
+    // 0.2.2+ отдаёт стабильный хендл состояния соединения; на старом хосте его нет.
+    item.statusOf = typeof McpClient.connectionStatusOf === 'function' ? McpClient.connectionStatusOf : undefined;
     const scopeCtx = agent === undefined ? ctx : agent.ctx;
     const fiber = scopeCtx.plugin(McpClient, mountConfig(resolvedEntry));
     item.fiber = fiber;
@@ -1114,7 +1130,7 @@ export async function apply(ctx, config) {
   const serversTool = () =>
     textTool(
       'edt_servers',
-      'List MCP servers of the 1C plugin: state (mounted, lazy, unavailable, failed), scope, transport, tool count, workspace root and endpoint, plus the worktree EDT environment when one is managed. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
+      'List MCP servers of the 1C plugin: state (mounted, lazy, unavailable, failed), connection state, scope, transport, tool count, workspace root and endpoint, plus the worktree EDT environment when one is managed. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
       {},
       async (_args, exec) => {
         const rows = snapshot(exec?.agent, { alive: cheapAlive }).map((item) => {
@@ -1124,6 +1140,7 @@ export async function apply(ctx, config) {
             item.endpoint === undefined ? null : `endpoint: ${item.endpoint}`,
             workspace?.state === 'worktree' ? `worktree: ${workspace.status}${workspace.port === undefined ? '' : ` port ${workspace.port}`}` : null,
             workspace?.state === 'error' ? `worktree: ${workspace.message}` : null,
+            item.connection === undefined ? null : `connection: ${item.connection}`,
             item.error === undefined ? null : `error: ${item.error}`,
           ]
             .filter(Boolean)
