@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildRulesText, mountConfig, normalizeServers } from '../packages/dsh-edt-projects/lib/index.js';
+import { buildRulesText, connectionStateOf, mountConfig, normalizeServers } from '../packages/dsh-edt-projects/lib/index.js';
 
 const server = (name, state = 'mounted') => ({ name, state });
 
@@ -182,6 +182,27 @@ test('mountConfig для http не тащит command и cwd', () => {
 test('mountConfig не оставляет undefined-поля', () => {
   const config = mountConfig({ name: 'edt', transport: 'streamable-http', raw: { url: 'http://x/mcp' } });
   assert.deepEqual(Object.keys(config).sort(), ['serverName', 'transport', 'url']);
+});
+
+test('connectionStateOf читает current(), а не свойство state', () => {
+  const fiber = {};
+  const status = connectionStateOf(() => ({ current: () => ({ state: 'reconnecting', lastError: 'boom' }) }), fiber);
+  assert.equal(status.state, 'reconnecting');
+  assert.equal(status.lastError, 'boom');
+  assert.equal(connectionStateOf(() => ({ state: 'connected' }), fiber), undefined);
+  assert.equal(connectionStateOf(() => { throw new Error('x'); }, fiber), undefined);
+  assert.equal(connectionStateOf(undefined, fiber), undefined);
+});
+
+test('mountConfig прокидывает поля mcp-client 0.2.2', () => {
+  const config = mountConfig({
+    name: 'edt',
+    transport: 'streamable-http',
+    raw: { url: 'http://x/mcp', startupTimeoutMs: 15000, closeTimeoutMs: 1000, expandTemplates: true },
+  });
+  assert.equal(config.startupTimeoutMs, 15000);
+  assert.equal(config.closeTimeoutMs, 1000);
+  assert.equal(config.expandTemplates, true);
 });
 
 test('окружение worktree: блок про имя workspace и edt_workspace', () => {

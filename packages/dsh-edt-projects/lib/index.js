@@ -290,6 +290,9 @@ export function mountConfig(entry) {
   const common = {
     serverName: entry.name,
     toolCallTimeoutMs: raw.toolCallTimeoutMs,
+    startupTimeoutMs: raw.startupTimeoutMs,
+    closeTimeoutMs: raw.closeTimeoutMs,
+    expandTemplates: raw.expandTemplates,
     failOnStartupError: raw.failOnStartupError,
     maxInstructionBytes: raw.maxInstructionBytes,
     reconnect: raw.reconnect,
@@ -303,6 +306,18 @@ export function mountConfig(entry) {
   const config = { ...common, ...specific };
   for (const key of Object.keys(config)) if (config[key] === undefined) delete config[key];
   return config;
+}
+
+/**
+ * Состояние соединения из mcp-client 0.2.2+: у хендла статус читается через
+ * `current()`, а не свойством. Ошибка или отсутствие хендла дают undefined.
+ */
+export function connectionStateOf(statusOf, fiber) {
+  try {
+    return statusOf?.(fiber)?.current?.();
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -594,7 +609,7 @@ export async function apply(ctx, config) {
     const map = mapFor(agent);
     let item = map.get(entry.name);
     if (item === undefined) {
-      item = { entry, fiber: null, error: null, supervisor: null, signature: undefined, suppressed: false };
+      item = { entry, fiber: null, error: null, supervisor: null, signature: undefined, suppressed: false, connectionStatusOf: undefined };
       map.set(entry.name, item);
     } else {
       item.entry = entry;
@@ -614,6 +629,9 @@ export async function apply(ctx, config) {
     }
   };
 
+  /** Снимок соединения для edt_servers; undefined, если хендл недоступен. */
+  const connectionOf = (item) => connectionStateOf(item?.connectionStatusOf, item?.fiber);
+
   const snapshot = (agent, deps = {}) => {
     const context = contextFor(agent);
     const workspace = describeWorkspace(context.workspace, deps);
@@ -628,6 +646,7 @@ export async function apply(ctx, config) {
       if (entry.name === 'edt' && item?.fiber && !item.error && workspace.state === 'worktree' && workspace.status !== 'ready') {
         value = workspace.status === 'failed' || workspace.status === 'stale' ? 'failed' : 'starting';
       }
+      const connection = connectionOf(item);
       return {
         name: entry.name,
         state: value,
@@ -636,6 +655,8 @@ export async function apply(ctx, config) {
         root: item?.supervisor?.root ?? entry.raw?.root,
         endpoint: item?.supervisor?.url ?? entry.raw?.url,
         tools: toolNamesOf(agent, entry.name).length,
+        connection: connection?.state,
+        connectionError: connection?.lastError,
         error: item?.error,
         workspace: entry.name === 'edt' ? workspace : undefined,
       };
@@ -651,6 +672,7 @@ export async function apply(ctx, config) {
     item.supervisor = null;
     item.error = null;
     item.signature = undefined;
+    item.connectionStatusOf = undefined;
   };
 
   const mount = async (agent, serverName, options = {}) => {
@@ -707,6 +729,10 @@ export async function apply(ctx, config) {
           raw: {
             ...resolved,
             toolCallTimeoutMs: entry.raw.toolCallTimeoutMs,
+            startupTimeoutMs: entry.raw.startupTimeoutMs,
+            closeTimeoutMs: entry.raw.closeTimeoutMs,
+            expandTemplates: entry.raw.expandTemplates,
+            maxInstructionBytes: entry.raw.maxInstructionBytes,
             failOnStartupError: entry.raw.failOnStartupError,
             reconnect: entry.raw.reconnect,
           },
@@ -720,6 +746,7 @@ export async function apply(ctx, config) {
     }
 
     const McpClient = await import('@deepseek-ai/dsh-mcp-client');
+    item.connectionStatusOf = McpClient.connectionStatusOf;
     const scopeCtx = agent === undefined ? ctx : agent.ctx;
     const fiber = scopeCtx.plugin(McpClient, mountConfig(resolvedEntry));
     item.fiber = fiber;
@@ -1114,7 +1141,7 @@ export async function apply(ctx, config) {
   const serversTool = () =>
     textTool(
       'edt_servers',
-      'List MCP servers of the 1C plugin: state (mounted, lazy, unavailable, failed), scope, transport, tool count, workspace root and endpoint, plus the worktree EDT environment when one is managed. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
+      'List MCP servers of the 1C plugin: state (mounted, lazy, unavailable, failed), connection state, scope, transport, tool count, workspace root and endpoint, plus the worktree EDT environment when one is managed. Settings are read from $DSH_HOME/dsh-1c.json and <cwd>/.dsh-1c.json.',
       {},
       async (_args, exec) => {
         const rows = snapshot(exec?.agent, { alive: cheapAlive }).map((item) => {
@@ -1124,6 +1151,9 @@ export async function apply(ctx, config) {
             item.endpoint === undefined ? null : `endpoint: ${item.endpoint}`,
             workspace?.state === 'worktree' ? `worktree: ${workspace.status}${workspace.port === undefined ? '' : ` port ${workspace.port}`}` : null,
             workspace?.state === 'error' ? `worktree: ${workspace.message}` : null,
+            item.connection === undefined
+              ? null
+              : `connection: ${item.connection}${item.connectionError === undefined ? '' : ` (${item.connectionError})`}`,
             item.error === undefined ? null : `error: ${item.error}`,
           ]
             .filter(Boolean)

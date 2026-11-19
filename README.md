@@ -48,7 +48,8 @@
 
 ## Требования
 
-1. **DSH 0.2.x** и профиль (`desktop` или `web`).
+1. **DSH 0.2.2-rc.5** — ровно та версия, что указана в `engines.dsh` бандла, — и
+   профиль (`desktop` или `web`).
 2. **EDT 2026.1 / 2026.2 с установленным EDT-MCP**: Help → Install New Software →
    `https://ditrixnew.github.io/EDT-MCP/` → EDT MCP Server Feature → перезапуск.
    Для основного checkout EDT запускается вручную (п. 3); в worktree плагин находит
@@ -75,7 +76,7 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 | Способ | Что передать |
 |---|---|
 | локальные исходники | `install_bundle` с путём `C:\git\dsh-edt-plugin\packages\dsh-edt-projects` (создаёт `link:`, правки видны после пересборки профиля) |
-| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.14.0/dsh-edt-projects-0.14.0.tgz` |
+| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.15.0/dsh-edt-projects-0.15.0.tgz` |
 | Web UI | Plugins → Add plugin → тот же путь или URL |
 
 ## Где включается
@@ -154,6 +155,8 @@ space у `dsh-worktree-space`) и проверяет `enabled`, `projects` и `.
 | `projects` | каталоги, где плагин включён (обычно в пользовательском файле) | пусто |
 | `servers.edt.url` | адрес MCP-сервера EDT | `http://127.0.0.1:8765/mcp` |
 | `servers.edt.toolCallTimeoutMs` | таймаут вызова: `update_database`, `run_yaxunit_tests` идут дольше 60 с | `900000` |
+| `servers.*.startupTimeoutMs` / `closeTimeoutMs` | бюджет стартового подключения и закрытия транспорта, мс | значения mcp-client |
+| `servers.*.expandTemplates` | раскрывать `${credential:…}` в адресе и заголовках (нужен сервис credentials, он есть в `dsh-base`) | `false` |
 | `servers.bsl.jar` / `url` / `version` | готовый jar, зеркало или закреплённый тег релиза | не заданы |
 | `servers.bsl.root` | корень исходников для BSL LS | каталог запуска DSH |
 | `servers.bsl.mode` | `hybrid` (LSP+MCP) или `stdio` | `hybrid` |
@@ -363,7 +366,7 @@ DSH не рендерит embedded resource, поэтому в workspace сра�
 | Инструмент | Что делает |
 |---|---|
 | `edt_config` | настройки плагина: включение проекта, вики, тесты, серверы, навыки; `show`/`init`/`upgrade`/`validate` |
-| `edt_servers` | состояние серверов: `mounted`, `lazy`, `unavailable`, `failed`, транспорт, число инструментов |
+| `edt_servers` | состояние серверов: `mounted`, `lazy`, `unavailable`, `failed`, состояние соединения, транспорт, число инструментов |
 | `edt_pin` | монтирует сервер; его инструменты появляются в следующем же запросе модели |
 | `edt_unpin` | снимает сервер и освобождает контекст |
 | `edt_reload` | перечитывает настройки и перезапускает серверы с изменившимся конфигом |
@@ -521,7 +524,8 @@ force-push, пуш в основную ветку и резолв неразоб
 | BSL не видит файлы конфигурации | задать `DSH_1C_BSL_LS_ROOT` (корень исходников) |
 | `edt_pin("v8std")` не подключается | проверить `V8STD_MCP_URL` / `servers.v8std.url`, доступ к сети или свой инстанс; без него стандарты можно смотреть на [v8std.ru](https://v8std.ru) |
 | правки не видны в EDT | править через `edt__*`; после ручной правки — `revalidate_objects` или `resync_to_disk` |
-| плагин не появился в списке | `plugin_manager list_bundles`; проверить, что версия DSH ≥ 0.2.0 |
+| плагин не появился в списке | `plugin_manager list_bundles`; версия DSH должна совпадать с `engines.dsh` бандла (0.2.2-rc.5) |
+| отказ `incompatible-version`, бандл пропущен | обновить плагин под установленную версию DSH; `dsh plugin allow-version` — только осознанный риск, а не способ починить |
 | в worktree нет `mcp__edt__*` | `edt_workspace action=status`: `starting` — подождать (импорт 19 проектов ≈ 11 мин), `failed` — смотреть `build/logs/edt.log`, `off` — проверить, что это linked worktree и проект включён |
 | `edt_workspace status`: «EDT-MCP не подтверждён по файлам» | это только эвристика: бандл может стоять в пользовательской `~/.eclipse/...`; готовность подтверждает `/health` после `ready` |
 | `edt_workspace status`: EDT не найден | задать `workspace.home.win32` или `DSH_1C_EDT_HOME` |
@@ -546,7 +550,7 @@ tools/                       проверки, тесты, smoke, заглушк
 ```text
 npm ci               # зависимости проверок
 npm run validate     # манифест, патч, локали, иконка, готовность к публикации, порт
-npm test             # 230 проверок: правила, BSL, конфиг, включение, worktree, окружение, вики, схема, навыки, cwd
+npm test             # 232 проверки: правила, BSL, конфиг, включение, worktree, окружение, вики, схема, навыки, cwd
 npm run pack:check   # состав tarball
 npm run check:edt    # живой MCP-сервер EDT
 npm run smoke        # прогон бандла в одноразовом профиле DSH
@@ -557,8 +561,10 @@ npm run workspace:stop-all -- --repo C:\git\trade
 Smoke ставит бандл из `dist/*.tgz` в одноразовый `DSH_HOME`, проверяет композицию
 профиля и поднимает заглушку MCP на порту из патча. Затем дважды стартует headless
 сессию: из каталога без `.dsh-1c.json` (заглушка не должна получить `initialize`) и
-из каталога с `.dsh-1c.json` (должна). Нужен установленный DSH
-(`npm i --no-save @deepseek-ai/dsh@0.2.1-rc.5` или `DSH_BIN`); если порт занят живым
+из каталога с `.dsh-1c.json` (должна). Smoke также проверяет, что в профиле нет
+второй копии `@deepseek-ai/dsh-mcp-client`: она остаётся peer-зависимостью хоста.
+Нужен установленный DSH
+(`npm i --no-save @deepseek-ai/dsh@0.2.2-rc.5` или `DSH_BIN`); если порт занят живым
 EDT — задайте `SMOKE_PORT`.
 
 **Релиз:** поднять `version` в `packages/dsh-edt-projects/package.json`, добавить
@@ -568,7 +574,7 @@ EDT — задайте `SMOKE_PORT`.
 
 ## Версионирование
 
-Проект в статусе беты и версионируется как **0.x** (текущая — `v0.14.0`). Между 0.x
+Проект в статусе беты и версионируется как **0.x** (текущая — `v0.15.0`). Между 0.x
 без миграции могут меняться ключи конфига, имена инструментов и структура
 `cordis.patch.yml`; `edt_config upgrade` дополняет файл, но совместимость не
 гарантирует. Версия 1.0.0 будет означать зафиксированный API. История — в
