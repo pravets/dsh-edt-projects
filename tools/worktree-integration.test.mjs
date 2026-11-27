@@ -164,3 +164,47 @@ test('worktree: projects в пользовательском файле вклю
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('edt_*: параметры инструментов — JSON Schema объекта', async () => {
+  const { dir, main } = fixture({ enabledFile: { enabled: true } });
+  try {
+    // Изолируем пользовательские настройки: иначе реальные серверы из
+    // $DSH_HOME/dsh-1c.json попробуют подключиться при активации проекта.
+    mkdirSync(join(dir, 'home'), { recursive: true });
+    const previous = process.env.DSH_HOME;
+    process.env.DSH_HOME = join(dir, 'home');
+    try {
+      const { ctx, handlers, tools } = fakeContext();
+      await apply(ctx, { workspace: { enabled: false } });
+      const agent = { ...agentIn(main), ctx };
+      await handlers.get('agent/created')({ agent });
+
+      const byName = new Map();
+      for (const name of ['edt_servers', 'edt_pin', 'edt_unpin', 'edt_reload', 'edt_workspace', 'edt_config']) {
+        const tool = tools.find((definition) => definition.name === name);
+        assert.ok(tool, `${name} зарегистрирован`);
+        byName.set(name, tool);
+        assert.equal(tool.parameters?.type, 'object', `${name}: parameters.type`);
+        assert.equal(typeof tool.parameters?.properties, 'object', `${name}: parameters.properties`);
+        for (const [key, property] of Object.entries(tool.parameters.properties)) {
+          assert.equal(Object.hasOwn(property, 'required'), false, `${name}.${key}: required вне свойства`);
+        }
+        for (const key of tool.parameters.required ?? []) {
+          assert.ok(Object.hasOwn(tool.parameters.properties, key), `${name}: required ${key} есть в properties`);
+        }
+      }
+
+      assert.deepEqual(byName.get('edt_pin').parameters.required, ['server']);
+      assert.deepEqual(byName.get('edt_unpin').parameters.required, ['server']);
+      assert.deepEqual(byName.get('edt_config').parameters.required, ['action']);
+      assert.equal(byName.get('edt_servers').parameters.required, undefined);
+      assert.equal(byName.get('edt_reload').parameters.required, undefined);
+      assert.equal(byName.get('edt_workspace').parameters.required, undefined);
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME;
+      else process.env.DSH_HOME = previous;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
