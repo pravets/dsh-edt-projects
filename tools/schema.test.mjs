@@ -163,6 +163,55 @@ test('isKnownPath понимает шаблоны с *', () => {
   assert.equal(isKnownPath('servers.edt.unknown'), false);
 });
 
+test('схема знает поля mcp-client 0.2.3 и поддерево oauth', () => {
+  for (const key of [
+    'servers.edt.toolLoading',
+    'servers.edt.catalogDescriptionMaxLength',
+    'servers.edt.oauth',
+    'servers.edt.oauth.clientId',
+    'servers.edt.oauth.scopes.0',
+  ]) {
+    assert.equal(isKnownPath(key), true, key);
+  }
+  // Поддерево oauth не делает известными чужие поля reconnect.
+  assert.equal(isKnownPath('servers.edt.reconnect.unknown'), false);
+
+  const config = {
+    version: CONFIG_VERSION,
+    servers: {
+      edt: {
+        url: 'http://x/mcp',
+        toolLoading: 'on-demand',
+        catalogDescriptionMaxLength: 120,
+        oauth: { clientId: 'edt', scopes: ['a'] },
+      },
+    },
+  };
+  const result = validateConfig(config);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings.filter((line) => line.includes('servers')), []);
+
+  const bad = validateConfig({ version: CONFIG_VERSION, servers: { edt: { toolLoading: ['x'] } } });
+  assert.ok(bad.errors.some((line) => line.includes('servers.edt.toolLoading')));
+});
+
+test('upgrade сохраняет поля mcp-client 0.2.3 без предупреждений', () => {
+  const dir = tempDir();
+  writeFileSync(
+    fileIn(dir),
+    JSON.stringify({
+      version: CONFIG_VERSION,
+      servers: { edt: { url: 'http://x/mcp', toolLoading: 'on-demand', oauth: { clientId: 'edt' } } },
+    }),
+    'utf8',
+  );
+  const result = upgradeFile(fileIn(dir));
+  const written = JSON.parse(readFileSync(fileIn(dir), 'utf8'));
+  assert.equal(written.servers.edt.toolLoading, 'on-demand');
+  assert.deepEqual(written.servers.edt.oauth, { clientId: 'edt' });
+  assert.deepEqual(result.warnings.filter((line) => line.includes('servers')), []);
+});
+
 test('stringifyConfig: отступ 2 и перевод строки в конце', () => {
   const text = stringifyConfig({ a: 1 });
   assert.equal(text, '{\n  "a": 1\n}\n');

@@ -1,6 +1,6 @@
 {
   "name": "dsh-edt-projects",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "type": "module",
   "description": "Project-scoped MCP hub for 1C development: active only in selected projects, EDT connected up front there, a per-worktree EDT workspace under build/ws, BSL Language Server, a task tracker and the v8std standards MCP mounted on demand, bundled SonarQube and GitLab skills, with model-facing usage rules",
   "license": "MIT",
@@ -15,8 +15,8 @@
   },
   "keywords": ["dsh", "deepseek-harness", "1c", "1c-edt", "bsl", "bsl-language-server", "mcp", "plugin"],
   "engines": {
-    "node": ">=22",
-    "dsh": "0.2.2-rc.5"
+    "node": "^24.22.3 || >=26.13.1",
+    "dsh": "0.2.3-alpha.2"
   },
   "main": "./lib/index.js",
   "exports": {
@@ -29,10 +29,10 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.5"
+    "@deepseek-ai/dsh-mcp-client": "0.2.3-alpha.2"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.5"
+    "@deepseek-ai/dsh-mcp-client": "0.2.3-alpha.2"
   },
   "dsh": {
     "bundle": {
