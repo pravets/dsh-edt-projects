@@ -48,8 +48,9 @@
 
 ## Требования
 
-1. **DSH 0.2.2-rc.5** — ровно та версия, что указана в `engines.dsh` бандла, — и
-   профиль (`desktop` или `web`).
+1. **DSH 0.2.3-alpha.2** — ровно та версия, что указана в `engines.dsh` бандла, — и
+   профиль (`desktop` или `web`). Этой версии DSH нужен **Node.js 24.22.3+**
+   (или 26.13.1+): на более старых Node в 24.x хост не стартует.
 2. **EDT 2026.1 / 2026.2 с установленным EDT-MCP**: Help → Install New Software →
    `https://ditrixnew.github.io/EDT-MCP/` → EDT MCP Server Feature → перезапуск.
    Для основного checkout EDT запускается вручную (п. 3); в worktree плагин находит
@@ -157,6 +158,9 @@ space у `dsh-worktree-space`) и проверяет `enabled`, `projects` и `.
 | `servers.edt.toolCallTimeoutMs` | таймаут вызова: `update_database`, `run_yaxunit_tests` идут дольше 60 с | `900000` |
 | `servers.*.startupTimeoutMs` / `closeTimeoutMs` | бюджет стартового подключения и закрытия транспорта, мс | значения mcp-client |
 | `servers.*.expandTemplates` | раскрывать `${credential:…}` в адресе и заголовках (нужен сервис credentials, он есть в `dsh-base`) | `false` |
+| `servers.*.toolLoading` | `eager` или `on-demand`: во втором режиме инструменты сервера попадают в каталог, а не регистрируются сразу (mcp-client 0.2.3) | `eager` |
+| `servers.*.catalogDescriptionMaxLength` | предел описания инструмента в каталоге `on-demand`, символов | `160` |
+| `servers.*.oauth` | OAuth-идентичность сервера (streamable-http); пассивное подключение не открывает браузер | не задан |
 | `servers.bsl.jar` / `url` / `version` | готовый jar, зеркало или закреплённый тег релиза | не заданы |
 | `servers.bsl.root` | корень исходников для BSL LS | каталог запуска DSH |
 | `servers.bsl.mode` | `hybrid` (LSP+MCP) или `stdio` | `hybrid` |
@@ -524,7 +528,7 @@ force-push, пуш в основную ветку и резолв неразоб
 | BSL не видит файлы конфигурации | задать `DSH_1C_BSL_LS_ROOT` (корень исходников) |
 | `edt_pin("v8std")` не подключается | проверить `V8STD_MCP_URL` / `servers.v8std.url`, доступ к сети или свой инстанс; без него стандарты можно смотреть на [v8std.ru](https://v8std.ru) |
 | правки не видны в EDT | править через `edt__*`; после ручной правки — `revalidate_objects` или `resync_to_disk` |
-| плагин не появился в списке | `plugin_manager list_bundles`; версия DSH должна совпадать с `engines.dsh` бандла (0.2.2-rc.5) |
+| плагин не появился в списке | `plugin_manager list_bundles`; версия DSH должна совпадать с `engines.dsh` бандла (0.2.3-alpha.2) |
 | отказ `incompatible-version`, бандл пропущен | обновить плагин под установленную версию DSH; `dsh plugin allow-version` — только осознанный риск, а не способ починить |
 | в worktree нет `mcp__edt__*` | `edt_workspace action=status`: `starting` — подождать (импорт 19 проектов ≈ 11 мин), `failed` — смотреть `build/logs/edt.log`, `off` — проверить, что это linked worktree и проект включён |
 | `edt_workspace status`: «EDT-MCP не подтверждён по файлам» | это только эвристика: бандл может стоять в пользовательской `~/.eclipse/...`; готовность подтверждает `/health` после `ready` |
@@ -564,8 +568,8 @@ Smoke ставит бандл из `dist/*.tgz` в одноразовый `DSH_H
 из каталога с `.dsh-1c.json` (должна). Smoke также проверяет, что в профиле нет
 второй копии `@deepseek-ai/dsh-mcp-client`: она остаётся peer-зависимостью хоста.
 Нужен установленный DSH
-(`npm i --no-save @deepseek-ai/dsh@0.2.2-rc.5` или `DSH_BIN`); если порт занят живым
-EDT — задайте `SMOKE_PORT`.
+(`npm i --no-save @deepseek-ai/dsh@0.2.3-alpha.2` или `DSH_BIN`); если порт занят живым
+EDT — задайте `SMOKE_PORT`. Нужен Node.js 24.22.3+ (или 26.13.1+) — как и для самого DSH.
 
 **Релиз:** поднять `version` в `packages/dsh-edt-projects/package.json`, добавить
 запись в `CHANGELOG.md`, поставить тег `vX.Y.Z` и запушить. `release.yml` сверит тег

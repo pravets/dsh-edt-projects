@@ -37,63 +37,63 @@ const markerDir = (marker) => {
   return dir;
 };
 
-const names = (config, cwd = emptyDir()) => providerWith(config).list({ cwd }).map((skill) => skill.name);
+const names = async (config, cwd = emptyDir()) => (await providerWith(config).list({ cwd })).map((skill) => skill.name);
 
-test('без флагов и маркеров каталог навыков пуст', () => {
-  assert.deepEqual(names({}), []);
-  assert.deepEqual(names(undefined), []);
+test('без флагов и маркеров каталог навыков пуст', async () => {
+  assert.deepEqual(await names({}), []);
+  assert.deepEqual(await names(undefined), []);
 });
 
-test('sonar включается флагом и наличием сервера sonarqube', () => {
-  assert.deepEqual(names({ sonar: { enabled: true } }), ['edt-mcp-project-sonar']);
-  assert.deepEqual(names({ servers: { sonarqube: { url: 'http://127.0.0.1:9000/mcp' } } }), ['edt-mcp-project-sonar']);
-  assert.deepEqual(names({ servers: { sonarqube: { url: 'x', disabled: true } } }), []);
+test('sonar включается флагом и наличием сервера sonarqube', async () => {
+  assert.deepEqual(await names({ sonar: { enabled: true } }), ['edt-mcp-project-sonar']);
+  assert.deepEqual(await names({ servers: { sonarqube: { url: 'http://127.0.0.1:9000/mcp' } } }), ['edt-mcp-project-sonar']);
+  assert.deepEqual(await names({ servers: { sonarqube: { url: 'x', disabled: true } } }), []);
 });
 
-test('gitlab включается только флагом, когда маркеров нет', () => {
-  assert.deepEqual(names({ gitlab: { enabled: true } }), ['edt-mcp-project-gitlab']);
-  assert.deepEqual(names({ gitlab: { enabled: false } }), []);
+test('gitlab включается только флагом, когда маркеров нет', async () => {
+  assert.deepEqual(await names({ gitlab: { enabled: true } }), ['edt-mcp-project-gitlab']);
+  assert.deepEqual(await names({ gitlab: { enabled: false } }), []);
 });
 
-test('оба флага дают оба навыка', () => {
-  assert.deepEqual(names({ sonar: { enabled: true }, gitlab: { enabled: true } }).sort(), [
+test('оба флага дают оба навыка', async () => {
+  assert.deepEqual((await names({ sonar: { enabled: true }, gitlab: { enabled: true } })).sort(), [
     'edt-mcp-project-gitlab',
     'edt-mcp-project-sonar',
   ]);
 });
 
-test('gitlab включается маркером .gitlab-ci.yml без флага', () => {
+test('gitlab включается маркером .gitlab-ci.yml без флага', async () => {
   const cwd = markerDir(GITLAB_MARKERS[0]);
-  assert.deepEqual(names({}, cwd), ['edt-mcp-project-gitlab']);
+  assert.deepEqual(await names({}, cwd), ['edt-mcp-project-gitlab']);
   assert.deepEqual(skillState('edt-mcp-project-gitlab', {}, cwd), {
     enabled: true,
     reason: `marker:${GITLAB_MARKERS[0]}`,
   });
 });
 
-test('gitlab включается каталогом шаблонов merge request', () => {
+test('gitlab включается каталогом шаблонов merge request', async () => {
   const cwd = markerDir('.gitlab/merge_request_templates/default.md');
   assert.equal(isGitlabEnabled({}, cwd), true);
   assert.equal(findMarker(cwd, GITLAB_MARKERS), '.gitlab/merge_request_templates');
 });
 
-test('sonar включается маркером sonar-project.properties', () => {
+test('sonar включается маркером sonar-project.properties', async () => {
   const cwd = markerDir(SONAR_MARKERS[0]);
-  assert.deepEqual(names({}, cwd), ['edt-mcp-project-sonar']);
+  assert.deepEqual(await names({}, cwd), ['edt-mcp-project-sonar']);
   assert.equal(skillState('edt-mcp-project-sonar', {}, cwd).reason, `marker:${SONAR_MARKERS[0]}`);
 });
 
-test('явный false сильнее маркера, явный true не требует маркера', () => {
+test('явный false сильнее маркера, явный true не требует маркера', async () => {
   const cwd = markerDir(GITLAB_MARKERS[0]);
-  assert.deepEqual(names({ gitlab: { enabled: false } }, cwd), []);
+  assert.deepEqual(await names({ gitlab: { enabled: false } }, cwd), []);
   assert.equal(skillState('edt-mcp-project-gitlab', { gitlab: { enabled: false } }, cwd).reason, 'off');
 
   const plain = emptyDir();
-  assert.deepEqual(names({ gitlab: { enabled: true } }, plain), ['edt-mcp-project-gitlab']);
+  assert.deepEqual(await names({ gitlab: { enabled: true } }, plain), ['edt-mcp-project-gitlab']);
   assert.equal(skillState('edt-mcp-project-gitlab', { gitlab: { enabled: true } }, plain).reason, 'flag');
 });
 
-test('sonar: projectKey включает навык, явный false выключает даже при сервере', () => {
+test('sonar: projectKey включает навык, явный false выключает даже при сервере', async () => {
   const cwd = emptyDir();
   assert.equal(isSonarEnabled({ sonar: { projectKey: 'demo' } }, cwd), true);
   assert.equal(skillState('edt-mcp-project-sonar', { sonar: { projectKey: 'demo' } }, cwd).reason, 'projectKey');
@@ -103,7 +103,7 @@ test('sonar: projectKey включает навык, явный false выклю
   );
 });
 
-test('маркер находится из подкаталога репозитория', () => {
+test('маркер находится из подкаталога репозитория', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-skills-repo-'));
   mkdirSync(join(root, '.git'));
   writeFileSync(join(root, GITLAB_MARKERS[0]), '', 'utf8');
@@ -114,7 +114,7 @@ test('маркер находится из подкаталога репозит
   assert.equal(skillState('edt-mcp-project-gitlab', {}, sub).reason, `marker:${GITLAB_MARKERS[0]}`);
 });
 
-test('маркер находится в репозитории task space', () => {
+test('маркер находится в репозитории task space', async () => {
   const task = mkdtempSync(join(tmpdir(), 'dsh-skills-task-'));
   const repo = join(task, 'repo-a');
   mkdirSync(join(repo, '.git'), { recursive: true });
@@ -124,13 +124,13 @@ test('маркер находится в репозитории task space', () 
   assert.equal(skillState('edt-mcp-project-sonar', {}, task).reason, `marker:${SONAR_MARKERS[0]}`);
 });
 
-test('без cwd маркеры не читаются, флаги работают', () => {
+test('без cwd маркеры не читаются, флаги работают', async () => {
   assert.equal(isGitlabEnabled({}), false);
   assert.equal(isGitlabEnabled({ gitlab: { enabled: true } }), true);
   assert.equal(isSonarEnabled({}), false);
 });
 
-test('skillStates перечисляет оба навыка с причиной', () => {
+test('skillStates перечисляет оба навыка с причиной', async () => {
   const cwd = markerDir(GITLAB_MARKERS[0]);
   const states = skillStates({ sonar: { enabled: true } }, cwd);
   assert.deepEqual(
@@ -142,7 +142,7 @@ test('skillStates перечисляет оба навыка с причиной
   );
 });
 
-test('предикаты включения экспортированы и работают', () => {
+test('предикаты включения экспортированы и работают', async () => {
   const cwd = emptyDir();
   assert.equal(isSonarEnabled({ sonar: { enabled: true } }, cwd), true);
   assert.equal(isSonarEnabled({}, cwd), false);
@@ -150,8 +150,8 @@ test('предикаты включения экспортированы и ра
   assert.equal(isGitlabEnabled({}, cwd), false);
 });
 
-test('кандидат содержит обязательные поля', () => {
-  const [candidate] = providerWith({ gitlab: { enabled: true } }).list({ cwd: emptyDir() });
+test('кандидат содержит обязательные поля', async () => {
+  const [candidate] = await providerWith({ gitlab: { enabled: true } }).list({ cwd: emptyDir() });
   assert.equal(candidate.name, 'edt-mcp-project-gitlab');
   assert.equal(candidate.source, 'bundled');
   assert.equal(candidate.rank, BUNDLED_RANK);
@@ -162,23 +162,23 @@ test('кандидат содержит обязательные поля', () =
   assert.ok(candidate.description.length > 20);
 });
 
-test('get отдаёт тело без frontmatter', () => {
+test('get отдаёт тело без frontmatter', async () => {
   const provider = providerWith({ sonar: { enabled: true } });
-  const [candidate] = provider.list({ cwd: emptyDir() });
-  const skill = provider.get(candidate);
+  const [candidate] = await provider.list({ cwd: emptyDir() });
+  const skill = await provider.get(candidate);
   assert.equal(skill.name, 'edt-mcp-project-sonar');
   assert.equal(skill.content.startsWith('---'), false);
   assert.match(skill.content, /# SonarQube/);
   assert.equal(skill.source, 'bundled');
 });
 
-test('get не отдаёт навык, выключенный явным false', () => {
+test('get не отдаёт навык, выключенный явным false', async () => {
   const cwd = markerDir(GITLAB_MARKERS[0]);
   const provider = providerWith({ gitlab: { enabled: false } });
-  assert.equal(provider.get({ name: 'edt-mcp-project-gitlab' }, { cwd }), undefined);
+  assert.equal(await provider.get({ name: 'edt-mcp-project-gitlab' }, { cwd }), undefined);
 });
 
-test('parseFrontmatter: значения, кавычки и отсутствие блока', () => {
+test('parseFrontmatter: значения, кавычки и отсутствие блока', async () => {
   const parsed = parseFrontmatter('---\nname: demo\ndescription: "A demo skill"\n---\n\n# Body\n');
   assert.deepEqual(parsed.meta, { name: 'demo', description: 'A demo skill' });
   assert.equal(parsed.body.startsWith('# Body'), true);
@@ -188,7 +188,7 @@ test('parseFrontmatter: значения, кавычки и отсутствие
   assert.equal(plain.body, '# Just a body\n');
 });
 
-test('файлы навыков: имя совпадает с каталогом, kebab-case, описание есть', () => {
+test('файлы навыков: имя совпадает с каталогом, kebab-case, описание есть', async () => {
   for (const skill of SKILLS) {
     const file = skillFile(skill.name);
     assert.equal(existsSync(file), true, `${file} должен существовать`);
@@ -199,7 +199,7 @@ test('файлы навыков: имя совпадает с каталогом
   }
 });
 
-test('навык GitLab: оформление MR, замечания ревью и запрет мержа без запроса', () => {
+test('навык GitLab: оформление MR, замечания ревью и запрет мержа без запроса', async () => {
   const text = readFileSync(skillFile('edt-mcp-project-gitlab'), 'utf8');
   for (const fragment of [
     '--template',
@@ -216,7 +216,7 @@ test('навык GitLab: оформление MR, замечания ревью 
   assert.match(text, /Never merge a merge request without an explicit user request/);
 });
 
-test('навык Sonar: замечания, компактный вывод и гейт', () => {
+test('навык Sonar: замечания, компактный вывод и гейт', async () => {
   const text = readFileSync(skillFile('edt-mcp-project-sonar'), 'utf8');
   for (const fragment of ['--statuses', '--format toon', 'sonar list projects', 'qualitygates/project_status']) {
     assert.ok(text.includes(fragment), `в навыке нет «${fragment}»`);
@@ -224,16 +224,16 @@ test('навык Sonar: замечания, компактный вывод и �
   assert.match(text, /not Sonar issues|не Sonar-issues|Merge request remarks are not Sonar issues/);
 });
 
-test('выключенный проект: навыков нет даже при включённых флагах', () => {
+test('выключенный проект: навыков нет даже при включённых флагах', async () => {
   const provider = createSkillsProvider({
     resolveConfig: () => ({ sonar: { enabled: true }, gitlab: { enabled: true } }),
     isEnabled: () => false,
   });
-  assert.deepEqual(provider.list({ cwd: 'C:\\git\\other' }), []);
-  assert.equal(provider.get({ name: 'edt-mcp-project-sonar' }, { cwd: 'C:\\git\\other' }), undefined);
+  assert.deepEqual(await provider.list({ cwd: 'C:\\git\\other' }), []);
+  assert.equal(await provider.get({ name: 'edt-mcp-project-sonar' }, { cwd: 'C:\\git\\other' }), undefined);
 });
 
-test('isEnabled получает cwd и действующий конфиг', () => {
+test('isEnabled получает cwd и действующий конфиг', async () => {
   const seen = [];
   const provider = createSkillsProvider({
     resolveConfig: () => ({ gitlab: { enabled: true } }),
@@ -242,15 +242,30 @@ test('isEnabled получает cwd и действующий конфиг', ()
       return cwd === '/enabled';
     },
   });
-  assert.deepEqual(provider.list({ cwd: '/enabled' }).map((skill) => skill.name), ['edt-mcp-project-gitlab']);
-  assert.deepEqual(provider.list({ cwd: '/disabled' }), []);
+  assert.deepEqual((await provider.list({ cwd: '/enabled' })).map((skill) => skill.name), ['edt-mcp-project-gitlab']);
+  assert.deepEqual(await provider.list({ cwd: '/disabled' }), []);
   assert.deepEqual(seen, [
     ['/enabled', true],
     ['/disabled', true],
   ]);
 });
 
-test('в текстах навыков нет зашитых адресов и ключей проектов', () => {
+test('провайдер отдаёт промисы: реестр DSH оборачивает вызов в waitWithAbort', async () => {
+  const provider = providerWith({ sonar: { enabled: true } });
+  const cwd = emptyDir();
+  // issue #11: синхронный массив падал с «promise.then is not a function»,
+  // потому что реестр навыков делает promise.then() при заданном signal.
+  const pendingList = provider.list({ cwd, signal: AbortSignal.timeout(5000) });
+  assert.equal(typeof pendingList.then, 'function');
+  const candidates = await pendingList;
+  assert.deepEqual(candidates.map((skill) => skill.name), ['edt-mcp-project-sonar']);
+
+  const pendingGet = provider.get(candidates[0], { cwd, signal: AbortSignal.timeout(5000) });
+  assert.equal(typeof pendingGet.then, 'function');
+  assert.equal((await pendingGet).name, 'edt-mcp-project-sonar');
+});
+
+test('в текстах навыков нет зашитых адресов и ключей проектов', async () => {
   const forbidden = [/[a-z0-9-]+\.internal\b/i, /\bgitlab\.[a-z0-9-]+\.[a-z]{2,}\b/i, /\bsq\.[a-z0-9-]+\.[a-z]{2,}\b/i];
   for (const file of walk(skillsRoot)) {
     const text = readFileSync(file, 'utf8');

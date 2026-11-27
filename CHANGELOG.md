@@ -10,6 +10,45 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-28
+
+### Изменено
+
+- **DSH 0.2.3-alpha.2.** `engines.dsh` = `0.2.3-alpha.2`, `@deepseek-ai/dsh-mcp-client`
+  в peer+dev = `0.2.3-alpha.2`; профиль на 0.2.2-rc.5 бандл больше не принимает —
+  пин точный, как и раньше. DSH этой версии требует **Node.js `^24.22.3 || >=26.13.1`**
+  (гайд `v0.2.3-alpha.1/node-24-22-3`), поэтому `engines.node` бандла и корня
+  повторяет требование, а CI поднят на Node 24.22.3.
+- **Монтирование через `McpClientHost`.** В 0.2.3 из `@deepseek-ai/dsh-mcp-client`
+  убраны `connectionStatusOf`, `probeServer`, `ReconnectSchema` и прочие прежние
+  экспорты. Плагин теперь создаёт хост на каждый скоуп (сессия/глобальный), конфиг
+  проверяется `host.validate(...)`, сервер монтируется `host.mount(...)` с
+  `instance.ready`/`instance.dispose()`. Хост живёт в изолированном дочернем
+  контексте (`ctx.isolate('mcpClientHost')`): имя сервиса одно на дерево Cordis, и
+  без изоляции второй хост (свой на агента или официальный `mcp-manager`) падал бы
+  с `service ... has been registered`. Инструменты по-прежнему остаются в скоупе
+  сессии, `edt_servers` читает `connection.state`/`lastError` из хендла статуса.
+- **Новые поля mcp-client 0.2.3** — `toolLoading`, `catalogDescriptionMaxLength` и
+  `oauth` (streamable-http) — проходят из файлов настроек в конфиг сервера, в том
+  числе для provisioned `bsl`. Поддерево `oauth` схема не считает неизвестными
+  ключами, его проверяет сам mcp-client.
+
+### Исправлено
+
+- **Провайдер навыков `edt-mcp-bundle-skills` теперь async** (`list`/`get` отдают
+  промисы). Реестр навыков DSH оборачивает вызов в `waitWithAbort(promise, signal)`
+  и вызывает `promise.then`, поэтому синхронный массив падал с
+  `TypeError: promise.then is not a function` при каждом обновлении каталога.
+  Закрывает issue #11.
+
+### Проверки
+
+- `npm test` — 239 тестов (добавлены контракт async-провайдера с `signal` и
+  проверка `mountConfig` реальной схемой mcp-client 0.2.3);
+- `npm run validate` — 18 проверок без замечаний;
+- `npm run pack:check` — 23 файла в пакете;
+- `npm run smoke` — прогон бандла в одноразовом профиле DSH 0.2.3-alpha.2.
+
 ## [0.15.1] - 2026-11-27
 
 ### Исправлено

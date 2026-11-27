@@ -27,10 +27,10 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24.22.3
           cache: npm
 
-      # Node 22 приносит npm 10.x, а trusted publishing требует npm >= 11.5.
+      # Node 24.22.3 приносит npm 11.x; trusted publishing требует npm >= 11.5.
       - name: npm для trusted publishing
         run: npm install -g "npm@^11.15.0"
 

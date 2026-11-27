@@ -296,12 +296,14 @@ export function mountConfig(entry) {
     failOnStartupError: raw.failOnStartupError,
     maxInstructionBytes: raw.maxInstructionBytes,
     reconnect: raw.reconnect,
+    toolLoading: raw.toolLoading,
+    catalogDescriptionMaxLength: raw.catalogDescriptionMaxLength,
   };
 
   const specific =
     entry.transport === 'stdio'
       ? { transport: 'stdio', command: raw.command, args: raw.args, env: raw.env, cwd: raw.cwd }
-      : { transport: 'streamable-http', url: raw.url, headers: raw.headers };
+      : { transport: 'streamable-http', url: raw.url, headers: raw.headers, oauth: raw.oauth };
 
   const config = { ...common, ...specific };
   for (const key of Object.keys(config)) if (config[key] === undefined) delete config[key];
@@ -309,12 +311,13 @@ export function mountConfig(entry) {
 }
 
 /**
- * Состояние соединения из mcp-client 0.2.2+: у хендла статус читается через
- * `current()`, а не свойством. Ошибка или отсутствие хендла дают undefined.
+ * Состояние соединения из mcp-client 0.2.3+: хендл статуса приходит из
+ * `McpClientHost.mount(...).ready` и читается через `current()`, а не свойством.
+ * Ошибка или отсутствие хендла дают undefined.
  */
-export function connectionStateOf(statusOf, fiber) {
+export function connectionStateOf(cell) {
   try {
-    return statusOf?.(fiber)?.current?.();
+    return cell?.current?.();
   } catch {
     return undefined;
   }
@@ -633,7 +636,7 @@ export async function apply(ctx, config) {
     const map = mapFor(agent);
     let item = map.get(entry.name);
     if (item === undefined) {
-      item = { entry, fiber: null, error: null, supervisor: null, signature: undefined, suppressed: false, connectionStatusOf: undefined };
+      item = { entry, instance: undefined, statusCell: undefined, error: null, supervisor: null, signature: undefined, suppressed: false };
       map.set(entry.name, item);
     } else {
       item.entry = entry;
@@ -654,7 +657,7 @@ export async function apply(ctx, config) {
   };
 
   /** Снимок соединения для edt_servers; undefined, если хендл недоступен. */
-  const connectionOf = (item) => connectionStateOf(item?.connectionStatusOf, item?.fiber);
+  const connectionOf = (item) => connectionStateOf(item?.statusCell);
 
   const snapshot = (agent, deps = {}) => {
     const context = contextFor(agent);
@@ -663,11 +666,11 @@ export async function apply(ctx, config) {
       const item = mapFor(agent).get(entry.name);
       let value = 'lazy';
       if (entry.unavailable) value = 'unavailable';
-      if (item?.fiber && !item.error) value = 'mounted';
+      if (item?.instance && !item.error) value = 'mounted';
       if (item?.error) value = 'failed';
       // Пока EDT-окружение не готово, mounted с нулём инструментов выглядит
       // как поломка: показываем фазу подъёма.
-      if (entry.name === 'edt' && item?.fiber && !item.error && workspace.state === 'worktree' && workspace.status !== 'ready') {
+      if (entry.name === 'edt' && item?.instance && !item.error && workspace.state === 'worktree' && workspace.status !== 'ready') {
         value = workspace.status === 'failed' || workspace.status === 'stale' ? 'failed' : 'starting';
       }
       const connection = connectionOf(item);
@@ -688,15 +691,48 @@ export async function apply(ctx, config) {
   };
 
   const disposeItem = async (item) => {
-    if (item.fiber) {
-      await item.fiber.dispose().catch(() => {});
-      item.fiber = null;
+    if (item.instance) {
+      try {
+        await Promise.resolve(item.instance.dispose?.());
+      } catch {
+        // Инстанс мог быть уже снят выгрузкой скоупа.
+      }
+      item.instance = undefined;
     }
+    item.statusCell = undefined;
     await Promise.resolve(item.supervisor?.stop?.()).catch(() => {});
     item.supervisor = null;
     item.error = null;
     item.signature = undefined;
-    item.connectionStatusOf = undefined;
+  };
+
+  /**
+   * Хосты mcp-client по скоупу. Имя сервиса `mcpClientHost` одно на всё дерево
+   * Cordis, поэтому каждый хост живёт в изолированном дочернем контексте:
+   * иначе второй хост (или официальный mcp-manager) падает с
+   * "service ... has been registered". В изолированном скоупе инстансы
+   * монтируются под тем же контекстом агента, поэтому инструменты не текут
+   * в чужие проекты.
+   */
+  const mcpHosts = new WeakMap();
+
+  const hostFor = (scopeCtx) => {
+    let pending = mcpHosts.get(scopeCtx);
+    if (pending !== undefined) return pending;
+    pending = (async () => {
+      const { McpClientHost } = await import('@deepseek-ai/dsh-mcp-client');
+      if (typeof McpClientHost !== 'function') {
+        throw new Error('@deepseek-ai/dsh-mcp-client не экспортирует McpClientHost: версия DSH не совпадает с engines.dsh');
+      }
+      const isolated = typeof scopeCtx.isolate === 'function' ? scopeCtx.isolate('mcpClientHost') : scopeCtx;
+      return new McpClientHost(isolated);
+    })().catch((error) => {
+      // Ошибку не кэшируем: следующая попытка (edt_pin) создаст хост заново.
+      mcpHosts.delete(scopeCtx);
+      throw error;
+    });
+    mcpHosts.set(scopeCtx, pending);
+    return pending;
   };
 
   const mount = async (agent, serverName, options = {}) => {
@@ -714,7 +750,7 @@ export async function apply(ctx, config) {
     const bsl = bslSettingsFor(context.effective, fallbackRootFor(context));
     const root = options.root ?? entry.raw.root ?? bsl.root;
 
-    if (item.fiber && !item.error) {
+    if (item.instance && !item.error) {
       const sameRoot = item.supervisor === null || item.supervisor?.root === root;
       if (sameRoot) {
         item.suppressed = false;
@@ -722,6 +758,9 @@ export async function apply(ctx, config) {
       }
       await disposeItem(item);
     }
+
+    // Неудачный инстанс держит serverName: снимаем его перед новой попыткой.
+    if (item.instance) await disposeItem(item);
 
     let resolvedEntry = entry;
     if (entry.provisioned) {
@@ -759,6 +798,9 @@ export async function apply(ctx, config) {
             maxInstructionBytes: entry.raw.maxInstructionBytes,
             failOnStartupError: entry.raw.failOnStartupError,
             reconnect: entry.raw.reconnect,
+            toolLoading: entry.raw.toolLoading,
+            catalogDescriptionMaxLength: entry.raw.catalogDescriptionMaxLength,
+            oauth: entry.raw.oauth,
           },
         };
       } catch (error) {
@@ -769,16 +811,16 @@ export async function apply(ctx, config) {
       }
     }
 
-    const McpClient = await import('@deepseek-ai/dsh-mcp-client');
-    item.connectionStatusOf = McpClient.connectionStatusOf;
     const scopeCtx = agent === undefined ? ctx : agent.ctx;
-    const fiber = scopeCtx.plugin(McpClient, mountConfig(resolvedEntry));
-    item.fiber = fiber;
-    item.error = null;
-    item.signature = signatureOf(resolvedEntry, root);
-    item.suppressed = false;
     try {
-      await fiber;
+      const host = await hostFor(scopeCtx);
+      const config = host.validate(mountConfig(resolvedEntry), ['servers', resolvedEntry.name]);
+      const instance = host.mount(config);
+      item.instance = instance;
+      item.error = null;
+      item.signature = signatureOf(resolvedEntry, root);
+      item.suppressed = false;
+      item.statusCell = await instance.ready;
     } catch (error) {
       item.error = error instanceof Error ? error.message : String(error);
     }
@@ -790,7 +832,7 @@ export async function apply(ctx, config) {
     const entry = entriesFor(context).find((candidate) => candidate.name === serverName);
     const map = mapFor(agent);
     const item = map.get(serverName);
-    if (item === undefined || !item.fiber) {
+    if (item === undefined || !item.instance) {
       if (entry !== undefined && item !== undefined) item.suppressed = true;
       return false;
     }
@@ -812,7 +854,7 @@ export async function apply(ctx, config) {
     const changed = [];
     for (const entry of targets) {
       const item = mapFor(agent).get(entry.name);
-      if (item === undefined || !item.fiber) continue;
+      if (item === undefined || !item.instance) continue;
       const freshRoot = entry.raw.root ?? bslSettingsFor(context.effective, fallbackRootFor(context)).root;
       const fresh = signatureOf(entry, freshRoot);
       if (fresh === item.signature) continue;

@@ -185,8 +185,13 @@ export function createSkillsProvider({ resolveConfig, isEnabled, logger } = {}) 
 
   return {
     name: 'edt-mcp-bundle-skills',
-    /** Отдаёт только навыки, включённые в конфиге проекта. */
-    list(options = {}) {
+    /**
+     * Отдаёт только навыки, включённые в конфиге проекта. Обязательно async:
+     * реестр навыков DSH оборачивает вызов в waitWithAbort(promise, signal) и
+     * делает promise.then(), поэтому синхронный массив падает с
+     * "promise.then is not a function" (issue #11).
+     */
+    async list(options = {}) {
       const cwd = options.cwd ?? process.cwd();
       if (!allowed(cwd)) return [];
       const config = configFor(cwd);
@@ -202,8 +207,8 @@ export function createSkillsProvider({ resolveConfig, isEnabled, logger } = {}) 
       }
       return candidates;
     },
-    /** Возвращает тело навыка без frontmatter. */
-    get(candidate, options = {}) {
+    /** Возвращает тело навыка без frontmatter; async по той же причине, что list(). */
+    async get(candidate, options = {}) {
       const cwd = options.cwd ?? process.cwd();
       if (!allowed(cwd)) return undefined;
       const config = configFor(cwd);

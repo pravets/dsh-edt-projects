@@ -81,6 +81,9 @@ export const KNOWN = {
   'servers.*.reconnect.initialDelayMs': { type: 'number', description: 'Начальная задержка переподключения, мс.' },
   'servers.*.reconnect.maxDelayMs': { type: 'number', description: 'Максимальная задержка переподключения, мс.' },
   'servers.*.reconnect.maxAttempts': { type: 'number', description: 'Максимум попыток переподключения.' },
+  'servers.*.toolLoading': { type: 'string', description: 'Режим загрузки инструментов mcp-client: eager или on-demand.' },
+  'servers.*.catalogDescriptionMaxLength': { type: 'number', description: 'Предел описания инструмента в каталоге on-demand, символов.' },
+  'servers.*.oauth': { type: 'object', description: 'OAuth-идентичность сервера (streamable-http, mcp-client 0.2.3).' },
   'servers.bsl.jar': { type: 'string', description: 'Готовый jar BSL Language Server.' },
   'servers.bsl.url': { type: 'string', description: 'Прямой URL на jar вместо GitHub.' },
   'servers.bsl.version': { type: 'string', description: 'Тег релиза BSL LS, например v1.0.7.' },
@@ -145,6 +148,9 @@ function matchesPattern(path, pattern) {
 /** Известен ли ключ (точное совпадение или шаблон с `*`). */
 export function isKnownPath(path) {
   if (KNOWN[path] !== undefined) return true;
+  // Поддерево OAuth целиком принадлежит mcp-client: плагин его не разбирает,
+  // а DSH проверяет поля сам при монтировании сервера.
+  if (/^servers\.[^.]+\.oauth\./.test(path)) return true;
   return Object.keys(KNOWN).some((pattern) => pattern.includes('*') && matchesPattern(path, pattern));
 }
 

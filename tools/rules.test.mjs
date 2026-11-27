@@ -3,6 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { Config } from '@deepseek-ai/dsh-mcp-client';
+
 import { buildRulesText, connectionStateOf, mountConfig, normalizeServers } from '../packages/dsh-edt-projects/lib/index.js';
 
 const server = (name, state = 'mounted') => ({ name, state });
@@ -184,14 +186,13 @@ test('mountConfig не оставляет undefined-поля', () => {
   assert.deepEqual(Object.keys(config).sort(), ['serverName', 'transport', 'url']);
 });
 
-test('connectionStateOf читает current(), а не свойство state', () => {
-  const fiber = {};
-  const status = connectionStateOf(() => ({ current: () => ({ state: 'reconnecting', lastError: 'boom' }) }), fiber);
+test('connectionStateOf читает current() хендла, а не свойство state', () => {
+  const status = connectionStateOf({ current: () => ({ state: 'reconnecting', lastError: 'boom' }) });
   assert.equal(status.state, 'reconnecting');
   assert.equal(status.lastError, 'boom');
-  assert.equal(connectionStateOf(() => ({ state: 'connected' }), fiber), undefined);
-  assert.equal(connectionStateOf(() => { throw new Error('x'); }, fiber), undefined);
-  assert.equal(connectionStateOf(undefined, fiber), undefined);
+  assert.equal(connectionStateOf({ state: 'connected' }), undefined);
+  assert.equal(connectionStateOf({ current: () => { throw new Error('x'); } }), undefined);
+  assert.equal(connectionStateOf(undefined), undefined);
 });
 
 test('mountConfig прокидывает поля mcp-client 0.2.2', () => {
@@ -203,6 +204,54 @@ test('mountConfig прокидывает поля mcp-client 0.2.2', () => {
   assert.equal(config.startupTimeoutMs, 15000);
   assert.equal(config.closeTimeoutMs, 1000);
   assert.equal(config.expandTemplates, true);
+});
+
+test('mountConfig прокидывает поля mcp-client 0.2.3', () => {
+  const config = mountConfig({
+    name: 'edt',
+    transport: 'streamable-http',
+    raw: {
+      url: 'http://x/mcp',
+      toolLoading: 'on-demand',
+      catalogDescriptionMaxLength: 120,
+      oauth: { clientId: 'edt' },
+    },
+  });
+  assert.equal(config.toolLoading, 'on-demand');
+  assert.equal(config.catalogDescriptionMaxLength, 120);
+  assert.deepEqual(config.oauth, { clientId: 'edt' });
+});
+
+test('mountConfig не отдаёт oauth stdio-серверу', () => {
+  const config = mountConfig({
+    name: 'bsl',
+    transport: 'stdio',
+    raw: { transport: 'stdio', command: 'java', args: ['-jar', 'x.jar'], oauth: { clientId: 'nope' } },
+  });
+  assert.equal('oauth' in config, false);
+});
+
+test('конфиг mountConfig проходит схему mcp-client 0.2.3', () => {
+  const http = Config(
+    mountConfig({
+      name: 'edt',
+      transport: 'streamable-http',
+      raw: { url: 'http://x/mcp', toolLoading: 'on-demand', catalogDescriptionMaxLength: 80, reconnect: { enabled: true } },
+    }),
+  );
+  assert.equal(http.toolLoading, 'on-demand');
+  assert.equal(http.catalogDescriptionMaxLength, 80);
+  assert.equal(http.serverName, 'edt');
+
+  const stdio = Config(
+    mountConfig({ name: 'bsl', transport: 'stdio', raw: { transport: 'stdio', command: 'java', args: ['-jar', 'x.jar'] } }),
+  );
+  assert.equal(stdio.transport, 'stdio');
+  assert.deepEqual(stdio.args, ['-jar', 'x.jar']);
+
+  assert.throws(() =>
+    Config(mountConfig({ name: 'edt', transport: 'streamable-http', raw: { url: 'http://x/mcp', toolLoading: 'nope' } })),
+  );
 });
 
 test('окружение worktree: блок про имя workspace и edt_workspace', () => {
