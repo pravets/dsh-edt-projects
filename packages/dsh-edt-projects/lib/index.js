@@ -363,13 +363,37 @@ const TEXT_OUTPUT = {
   render: (_args, value) => [{ type: 'text', text: value.text }],
 };
 
-const textTool = (toolName, description, parameters, execute) => ({
-  name: toolName,
-  description,
-  parameters,
-  output: TEXT_OUTPUT,
-  execute,
-});
+/**
+ * Собирает схему параметров инструмента. Строгие OpenAI-совместимые провайдеры
+ * (Kimi /coding/v1) проверяют корень схемы и отклоняют запрос, если в
+ * `parameters` лежит голая карта свойств: нужен `type: "object"` с
+ * `properties`. Авторский признак `required: true` внутри свойства — не JSON
+ * Schema, поэтому он переезжает в массив `required` на корне.
+ */
+const textTool = (toolName, description, parameters, execute) => {
+  const properties = {};
+  const required = [];
+  for (const [key, value] of Object.entries(parameters ?? {})) {
+    if (value?.required === true) {
+      const { required: _flag, ...rest } = value;
+      properties[key] = rest;
+      required.push(key);
+    } else {
+      properties[key] = value;
+    }
+  }
+  return {
+    name: toolName,
+    description,
+    parameters: {
+      type: 'object',
+      properties,
+      ...(required.length > 0 ? { required } : {}),
+    },
+    output: TEXT_OUTPUT,
+    execute,
+  };
+};
 
 /** Подпись конфигурации для обнаружения изменений при edt_reload. */
 const signatureOf = (entry, root) => JSON.stringify({ config: mountConfig(entry), root });
