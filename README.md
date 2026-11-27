@@ -76,7 +76,7 @@ plugin_manager { action: "install_bundle", target: "dsh-edt-projects" }
 | Способ | Что передать |
 |---|---|
 | локальные исходники | `install_bundle` с путём `C:\git\dsh-edt-plugin\packages\dsh-edt-projects` (создаёт `link:`, правки видны после пересборки профиля) |
-| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.15.0/dsh-edt-projects-0.15.0.tgz` |
+| релизный tarball | URL `https://github.com/pravets/dsh-edt-projects/releases/download/v0.15.1/dsh-edt-projects-0.15.1.tgz` |
 | Web UI | Plugins → Add plugin → тот же путь или URL |
 
 ## Где включается
@@ -574,7 +574,7 @@ EDT — задайте `SMOKE_PORT`.
 
 ## Версионирование
 
-Проект в статусе беты и версионируется как **0.x** (текущая — `v0.15.0`). Между 0.x
+Проект в статусе беты и версионируется как **0.x** (текущая — `v0.15.1`). Между 0.x
 без миграции могут меняться ключи конфига, имена инструментов и структура
 `cordis.patch.yml`; `edt_config upgrade` дополняет файл, но совместимость не
 гарантирует. Версия 1.0.0 будет означать зафиксированный API. История — в
