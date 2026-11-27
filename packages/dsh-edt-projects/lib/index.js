@@ -823,6 +823,12 @@ export async function apply(ctx, config) {
       item.statusCell = await instance.ready;
     } catch (error) {
       item.error = error instanceof Error ? error.message : String(error);
+      // Provisioned BSL уже запущен: без инстанса его некому остановить, а
+      // повторный edt_pin перезапишет item.supervisor и оставит процесс жить.
+      if (!item.instance) {
+        await Promise.resolve(item.supervisor?.stop?.()).catch(() => {});
+        item.supervisor = null;
+      }
     }
     return { already: false, tools: toolNamesOf(agent, serverName).length, error: item.error };
   };
