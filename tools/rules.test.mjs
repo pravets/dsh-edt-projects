@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { Config } from '@deepseek-ai/dsh-mcp-client';
 
-import { buildRulesText, connectionStateOf, mountConfig, normalizeServers } from '../packages/dsh-edt-projects/lib/index.js';
+import { ALPHA_ONLY_FIELDS, buildRulesText, connectionStateOf, mountConfig, normalizeServers } from '../packages/dsh-edt-projects/lib/index.js';
 
 const server = (name, state = 'mounted') => ({ name, state });
 
@@ -207,16 +207,14 @@ test('mountConfig прокидывает поля mcp-client 0.2.2', () => {
 });
 
 test('mountConfig прокидывает поля mcp-client 0.2.3', () => {
-  const config = mountConfig({
-    name: 'edt',
-    transport: 'streamable-http',
-    raw: {
-      url: 'http://x/mcp',
-      toolLoading: 'on-demand',
-      catalogDescriptionMaxLength: 120,
-      oauth: { clientId: 'edt' },
-    },
-  });
+  const raw = {
+    url: 'http://x/mcp',
+    toolLoading: 'on-demand',
+    catalogDescriptionMaxLength: 120,
+    oauth: { clientId: 'edt' },
+  };
+  const config = mountConfig({ name: 'edt', transport: 'streamable-http', raw });
+  for (const key of ALPHA_ONLY_FIELDS) assert.equal(key in config, true, key);
   assert.equal(config.toolLoading, 'on-demand');
   assert.equal(config.catalogDescriptionMaxLength, 120);
   assert.deepEqual(config.oauth, { clientId: 'edt' });
@@ -231,17 +229,25 @@ test('mountConfig не отдаёт oauth stdio-серверу', () => {
   assert.equal('oauth' in config, false);
 });
 
-test('конфиг mountConfig проходит схему mcp-client 0.2.3', () => {
+test('mountConfig на legacy-хосте вырезает поля mcp-client 0.2.3', () => {
+  const raw = { url: 'http://x/mcp', toolLoading: 'on-demand', catalogDescriptionMaxLength: 120, oauth: { clientId: 'edt' } };
+  const config = mountConfig({ name: 'edt', transport: 'streamable-http', raw }, { legacy: true });
+  for (const key of ['toolLoading', 'catalogDescriptionMaxLength', 'oauth']) {
+    assert.equal(key in config, false, key);
+  }
+  assert.equal(config.url, 'http://x/mcp');
+});
+
+test('конфиг mountConfig проходит схему mcp-client rc.5', () => {
   const http = Config(
     mountConfig({
       name: 'edt',
       transport: 'streamable-http',
-      raw: { url: 'http://x/mcp', toolLoading: 'on-demand', catalogDescriptionMaxLength: 80, reconnect: { enabled: true } },
+      raw: { url: 'http://x/mcp', reconnect: { enabled: true }, startupTimeoutMs: 15000 },
     }),
   );
-  assert.equal(http.toolLoading, 'on-demand');
-  assert.equal(http.catalogDescriptionMaxLength, 80);
   assert.equal(http.serverName, 'edt');
+  assert.equal(http.startupTimeoutMs, 15000);
 
   const stdio = Config(
     mountConfig({ name: 'bsl', transport: 'stdio', raw: { transport: 'stdio', command: 'java', args: ['-jar', 'x.jar'] } }),
@@ -249,9 +255,12 @@ test('конфиг mountConfig проходит схему mcp-client 0.2.3', ()
   assert.equal(stdio.transport, 'stdio');
   assert.deepEqual(stdio.args, ['-jar', 'x.jar']);
 
-  assert.throws(() =>
-    Config(mountConfig({ name: 'edt', transport: 'streamable-http', raw: { url: 'http://x/mcp', toolLoading: 'nope' } })),
-  );
+  // Схема rc.5 не строга: лишние поля она игнорирует, а legacy-вырезание
+  // гарантирует, что до конфига они не доедут.
+  const entry = { name: 'edt', transport: 'streamable-http', raw: { url: 'http://x/mcp', toolLoading: 'on-demand' } };
+  assert.doesNotThrow(() => Config(mountConfig(entry)));
+  const legacy = Config(mountConfig(entry, { legacy: true }));
+  for (const key of ALPHA_ONLY_FIELDS) assert.equal(key in legacy, false, key);
 });
 
 test('окружение worktree: блок про имя workspace и edt_workspace', () => {

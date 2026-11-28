@@ -119,6 +119,8 @@ if (manifest) {
   // DSH 0.2.2+ читает engines.dsh при установке и на каждом старте. mcp-client —
   // общий с хостом экземпляр: в dependencies он дал бы вторую копию в профиле.
   const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client';
+  // peer — диапазон: на rc.5 плагин идёт legacy-путём, на 0.2.3+ через McpClientHost.
+  const PEER_RANGE = /^>=\s*0\.2\.2-rc\.5\s*<\s*0\.3$/;
   const dshRange = manifest.engines?.dsh;
   const exactSemver = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
   if (typeof dshRange !== 'string' || dshRange.trim() === '') {
@@ -132,10 +134,12 @@ if (manifest) {
       fail(`package.json: ${MCP_CLIENT} в dependencies — в профиле появится вторая копия; нужен peer+dev`);
     } else if (peer === undefined || dev === undefined) {
       fail(`package.json: ${MCP_CLIENT} должен быть в peerDependencies и devDependencies`);
-    } else if (peer !== dshRange || dev !== dshRange) {
-      fail(`версии расходятся: engines.dsh ${dshRange}, peer ${peer}, dev ${dev}`);
+    } else if (dev !== dshRange) {
+      fail(`версии расходятся: engines.dsh ${dshRange}, dev ${dev}`);
+    } else if (!PEER_RANGE.test(String(peer))) {
+      fail(`package.json: peer ${MCP_CLIENT} «${peer}» — ожидался диапазон «${PEER_RANGE.source}», чтобы плагин работал на rc.5 legacy-путём и на 0.2.3 через McpClientHost`);
     } else {
-      pass(`совместимость: DSH ${dshRange}, ${MCP_CLIENT} — peer+dev`);
+      pass(`совместимость: DSH ${dshRange}, ${MCP_CLIENT} — peer ${peer} + dev ${dev}`);
     }
   }
 

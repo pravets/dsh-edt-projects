@@ -81,7 +81,7 @@ function readManifest() {
 }
 
 /** В профиле у бандла не должно быть своей копии mcp-client: он живёт как peer хоста. */
-function checkNoSecondMcpClient(home, dshVersion) {
+function checkNoSecondMcpClient(home) {
   const installed = join(home, 'profiles', 'headless', 'node_modules', 'dsh-edt-projects', 'package.json');
   if (!existsSync(installed)) {
     fail('в профиле нет установленного dsh-edt-projects — нечего проверить');
@@ -96,7 +96,6 @@ function checkNoSecondMcpClient(home, dshVersion) {
   const label = `dsh-edt-projects@${manifest.version}`;
   if (own !== undefined) fail(`${label} тянет @deepseek-ai/dsh-mcp-client@${own} — вторая копия вместо peer`);
   else if (peer === undefined) fail(`${label}: @deepseek-ai/dsh-mcp-client не объявлен peer-зависимостью`);
-  else if (peer !== dshVersion) fail(`${label}: peer mcp-client ${peer} не совпадает с engines.dsh ${dshVersion}`);
   else console.log(`  ok   ${label}: mcp-client — peer ${peer}, своей копии нет`);
 }
 
@@ -152,7 +151,7 @@ async function main() {
   // 2. Установка бандла из tarball — ровно тем же путём, что и у пользователя.
   console.log('[2/5] устанавливаю бандл из tarball');
   run(['plugin', '--profile', 'headless', 'add', tarball], { env, label: 'dsh plugin add' });
-  checkNoSecondMcpClient(home, expectedDsh);
+  checkNoSecondMcpClient(home);
 
   // 3. Композиция профиля: строка плагина правил и строка сервера должны быть в дереве.
   console.log('[3/5] проверяю композицию профиля');

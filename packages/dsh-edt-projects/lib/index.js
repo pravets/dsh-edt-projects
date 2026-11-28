@@ -282,10 +282,17 @@ export function normalizeServers(config = {}) {
 }
 
 /**
+ * Поля mcp-client 0.2.3, которых нет в схеме 0.2.2: на старом хосте их отдавать
+ * нельзя — строгая схема отклонит весь конфиг сервера.
+ */
+export const ALPHA_ONLY_FIELDS = ['toolLoading', 'catalogDescriptionMaxLength', 'oauth'];
+
+/**
  * Собирает конфиг для @deepseek-ai/dsh-mcp-client: остаётся только то, что
  * допускает схема выбранного транспорта, плюс его собственные поля.
+ * `legacy: true` (mcp-client 0.2.2) вырезает поля, которых нет в старой схеме.
  */
-export function mountConfig(entry) {
+export function mountConfig(entry, options = {}) {
   const raw = entry.raw ?? {};
   const common = {
     serverName: entry.name,
@@ -306,6 +313,7 @@ export function mountConfig(entry) {
       : { transport: 'streamable-http', url: raw.url, headers: raw.headers, oauth: raw.oauth };
 
   const config = { ...common, ...specific };
+  if (options.legacy === true) for (const key of ALPHA_ONLY_FIELDS) delete config[key];
   for (const key of Object.keys(config)) if (config[key] === undefined) delete config[key];
   return config;
 }
@@ -720,12 +728,11 @@ export async function apply(ctx, config) {
     let pending = mcpHosts.get(scopeCtx);
     if (pending !== undefined) return pending;
     pending = (async () => {
-      const { McpClientHost } = await import('@deepseek-ai/dsh-mcp-client');
-      if (typeof McpClientHost !== 'function') {
-        throw new Error('@deepseek-ai/dsh-mcp-client не экспортирует McpClientHost: версия DSH не совпадает с engines.dsh');
-      }
+      const McpClient = await import('@deepseek-ai/dsh-mcp-client');
+      // 0.2.3+: серверы монтирует хост. На 0.2.2 его нет — там ctx.plugin(модуль).
+      if (typeof McpClient.McpClientHost !== 'function') return null;
       const isolated = typeof scopeCtx.isolate === 'function' ? scopeCtx.isolate('mcpClientHost') : scopeCtx;
-      return new McpClientHost(isolated);
+      return new McpClient.McpClientHost(isolated);
     })().catch((error) => {
       // Ошибку не кэшируем: следующая попытка (edt_pin) создаст хост заново.
       mcpHosts.delete(scopeCtx);
@@ -733,6 +740,16 @@ export async function apply(ctx, config) {
     });
     mcpHosts.set(scopeCtx, pending);
     return pending;
+  };
+
+  /** legacy-путь для mcp-client 0.2.2: модуль плагина + fiber вместо инстанса. */
+  const mountLegacy = async (scopeCtx, resolvedEntry) => {
+    const McpClient = await import('@deepseek-ai/dsh-mcp-client');
+    if (typeof McpClient.apply !== 'function') {
+      throw new Error('@deepseek-ai/dsh-mcp-client не похож ни на 0.2.2 (apply), ни на 0.2.3 (McpClientHost): версия DSH не совпадает с engines.dsh');
+    }
+    const fiber = scopeCtx.plugin(McpClient, mountConfig(resolvedEntry, { legacy: true }));
+    return { fiber, statusOf: McpClient.connectionStatusOf, dispose: () => fiber.dispose() };
   };
 
   const mount = async (agent, serverName, options = {}) => {
@@ -814,13 +831,25 @@ export async function apply(ctx, config) {
     const scopeCtx = agent === undefined ? ctx : agent.ctx;
     try {
       const host = await hostFor(scopeCtx);
-      const config = host.validate(mountConfig(resolvedEntry), ['servers', resolvedEntry.name]);
-      const instance = host.mount(config);
-      item.instance = instance;
-      item.error = null;
-      item.signature = signatureOf(resolvedEntry, root);
-      item.suppressed = false;
-      item.statusCell = await instance.ready;
+      if (host === null) {
+        // mcp-client 0.2.2: монтируем модуль плагина напрямую, fiber вместо инстанса.
+        const legacy = await mountLegacy(scopeCtx, resolvedEntry);
+        item.instance = legacy;
+        item.error = null;
+        item.signature = signatureOf(resolvedEntry, root);
+        item.suppressed = false;
+        await legacy.fiber;
+        // Хендл статуса читаем после settle: до активации cell ещё не зарегистрирован.
+        item.statusCell = legacy.statusOf?.(legacy.fiber) ?? undefined;
+      } else {
+        const config = host.validate(mountConfig(resolvedEntry), ['servers', resolvedEntry.name]);
+        const instance = host.mount(config);
+        item.instance = instance;
+        item.error = null;
+        item.signature = signatureOf(resolvedEntry, root);
+        item.suppressed = false;
+        item.statusCell = await instance.ready;
+      }
     } catch (error) {
       item.error = error instanceof Error ? error.message : String(error);
       // Provisioned BSL уже запущен: без инстанса его некому остановить, а
