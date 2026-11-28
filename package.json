@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.2.0",
+    "semver": "^7.8.6",
     "yaml": "^2.8.1"
   }
 }
