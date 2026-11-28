@@ -48,9 +48,9 @@
 
 ## Требования
 
-1. **DSH 0.2.2-rc.5** — ровно та версия, что указана в `engines.dsh` бандла, — и
-   профиль (`desktop` или `web`). Монтирование работает и на DSH 0.2.3+: там
-   плагин идёт через `McpClientHost`, на rc.5 — через fiber mcp-client.
+1. **DSH 0.2.2-rc.5 … <0.3** — версия из `engines.dsh` бандла — и профиль
+   (`desktop` или `web`). На rc.5 серверы монтируются через fiber mcp-client, на
+   0.2.3+ — через `McpClientHost`, настройки одинаковы.
 2. **EDT 2026.1 / 2026.2 с установленным EDT-MCP**: Help → Install New Software →
    `https://ditrixnew.github.io/EDT-MCP/` → EDT MCP Server Feature → перезапуск.
    Для основного checkout EDT запускается вручную (п. 3); в worktree плагин находит
@@ -528,7 +528,7 @@ force-push, пуш в основную ветку и резолв неразоб
 | BSL не видит файлы конфигурации | задать `DSH_1C_BSL_LS_ROOT` (корень исходников) |
 | `edt_pin("v8std")` не подключается | проверить `V8STD_MCP_URL` / `servers.v8std.url`, доступ к сети или свой инстанс; без него стандарты можно смотреть на [v8std.ru](https://v8std.ru) |
 | правки не видны в EDT | править через `edt__*`; после ручной правки — `revalidate_objects` или `resync_to_disk` |
-| плагин не появился в списке | `plugin_manager list_bundles`; версия DSH должна совпадать с `engines.dsh` бандла (0.2.2-rc.5) |
+| плагин не появился в списке | `plugin_manager list_bundles`; версия DSH должна попадать в `engines.dsh` бандла (`>=0.2.2-rc.5 <0.3`) |
 | отказ `incompatible-version`, бандл пропущен | обновить плагин под установленную версию DSH; `dsh plugin allow-version` — только осознанный риск, а не способ починить |
 | в worktree нет `mcp__edt__*` | `edt_workspace action=status`: `starting` — подождать (импорт 19 проектов ≈ 11 мин), `failed` — смотреть `build/logs/edt.log`, `off` — проверить, что это linked worktree и проект включён |
 | `edt_workspace status`: «EDT-MCP не подтверждён по файлам» | это только эвристика: бандл может стоять в пользовательской `~/.eclipse/...`; готовность подтверждает `/health` после `ready` |

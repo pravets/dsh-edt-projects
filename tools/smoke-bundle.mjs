@@ -29,6 +29,7 @@ const parsePatch = (text) => parseYaml(text.replace(JS_TAG, (_, expr) => JSON.st
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const patchFile = join(root, 'packages', 'dsh-edt-projects', 'cordis.patch.yml');
 const require = createRequire(import.meta.url);
+const semver = require('semver');
 
 const fail = (message) => {
   console.error(`\nSMOKE FAIL: ${message}`);
@@ -115,15 +116,17 @@ async function main() {
   const bin = dshBin();
   if (!bin) throw new Error('не найден @deepseek-ai/dsh: задайте DSH_BIN или установите пакет');
 
-  // Версия DSH — из манифеста бандла: engines.dsh и есть контракт совместимости.
+  // Контракт совместимости — engines.dsh: бандл поддерживает и rc.5 (fiber),
+  // и 0.2.3+ (McpClientHost), поэтому проверяем версию диапазоном с учётом
+  // пре-релизов, как это делает dsh-app-boot.
   const manifest = readManifest();
   const expectedDsh = manifest.engines?.dsh;
   if (typeof expectedDsh !== 'string' || expectedDsh.trim() === '') throw new Error('в package.json бандла нет engines.dsh');
   const installed = JSON.parse(readFileSync(join(dirname(bin), '..', 'package.json'), 'utf8'));
-  if (installed.version !== expectedDsh) {
-    throw new Error(`DSH ${installed.version} не совпадает с engines.dsh ${expectedDsh}: обновите DSH или пин в манифесте`);
+  if (!semver.satisfies(installed.version, expectedDsh, { includePrerelease: true })) {
+    throw new Error(`DSH ${installed.version} не попадает в engines.dsh ${expectedDsh}: обновите DSH или диапазон в манифесте`);
   }
-  console.log(`DSH: ${installed.version} (engines.dsh)`);
+  console.log(`DSH: ${installed.version} (engines.dsh ${expectedDsh})`);
 
   const hub = readHubRow();
   const tarball = findTarball();
