@@ -32,13 +32,13 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.22.3
+          node-version: 22
           cache: npm
 
       - name: Версия DSH из engines.dsh
+        # Диапазон >=0.2.2-rc.5 <0.3: в CI гоняем нижнюю границу — rc.5, legacy-путь.
         run: |
-          version=$(node -p "require('./packages/dsh-edt-projects/package.json').engines.dsh")
-          echo "DSH_VERSION=$version" >> "$GITHUB_ENV"
+          echo "DSH_VERSION=0.2.2-rc.5" >> "$GITHUB_ENV"
 
       - name: Зависимости репозитория
         run: npm ci

@@ -29,6 +29,7 @@ const parsePatch = (text) => parseYaml(text.replace(JS_TAG, (_, expr) => JSON.st
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const patchFile = join(root, 'packages', 'dsh-edt-projects', 'cordis.patch.yml');
 const require = createRequire(import.meta.url);
+const semver = require('semver');
 
 const fail = (message) => {
   console.error(`\nSMOKE FAIL: ${message}`);
@@ -81,7 +82,7 @@ function readManifest() {
 }
 
 /** В профиле у бандла не должно быть своей копии mcp-client: он живёт как peer хоста. */
-function checkNoSecondMcpClient(home, dshVersion) {
+function checkNoSecondMcpClient(home) {
   const installed = join(home, 'profiles', 'headless', 'node_modules', 'dsh-edt-projects', 'package.json');
   if (!existsSync(installed)) {
     fail('в профиле нет установленного dsh-edt-projects — нечего проверить');
@@ -96,7 +97,6 @@ function checkNoSecondMcpClient(home, dshVersion) {
   const label = `dsh-edt-projects@${manifest.version}`;
   if (own !== undefined) fail(`${label} тянет @deepseek-ai/dsh-mcp-client@${own} — вторая копия вместо peer`);
   else if (peer === undefined) fail(`${label}: @deepseek-ai/dsh-mcp-client не объявлен peer-зависимостью`);
-  else if (peer !== dshVersion) fail(`${label}: peer mcp-client ${peer} не совпадает с engines.dsh ${dshVersion}`);
   else console.log(`  ok   ${label}: mcp-client — peer ${peer}, своей копии нет`);
 }
 
@@ -116,15 +116,17 @@ async function main() {
   const bin = dshBin();
   if (!bin) throw new Error('не найден @deepseek-ai/dsh: задайте DSH_BIN или установите пакет');
 
-  // Версия DSH — из манифеста бандла: engines.dsh и есть контракт совместимости.
+  // Контракт совместимости — engines.dsh: бандл поддерживает и rc.5 (fiber),
+  // и 0.2.3+ (McpClientHost), поэтому проверяем версию диапазоном с учётом
+  // пре-релизов, как это делает dsh-app-boot.
   const manifest = readManifest();
   const expectedDsh = manifest.engines?.dsh;
   if (typeof expectedDsh !== 'string' || expectedDsh.trim() === '') throw new Error('в package.json бандла нет engines.dsh');
   const installed = JSON.parse(readFileSync(join(dirname(bin), '..', 'package.json'), 'utf8'));
-  if (installed.version !== expectedDsh) {
-    throw new Error(`DSH ${installed.version} не совпадает с engines.dsh ${expectedDsh}: обновите DSH или пин в манифесте`);
+  if (!semver.satisfies(installed.version, expectedDsh, { includePrerelease: true })) {
+    throw new Error(`DSH ${installed.version} не попадает в engines.dsh ${expectedDsh}: обновите DSH или диапазон в манифесте`);
   }
-  console.log(`DSH: ${installed.version} (engines.dsh)`);
+  console.log(`DSH: ${installed.version} (engines.dsh ${expectedDsh})`);
 
   const hub = readHubRow();
   const tarball = findTarball();
@@ -152,7 +154,7 @@ async function main() {
   // 2. Установка бандла из tarball — ровно тем же путём, что и у пользователя.
   console.log('[2/5] устанавливаю бандл из tarball');
   run(['plugin', '--profile', 'headless', 'add', tarball], { env, label: 'dsh plugin add' });
-  checkNoSecondMcpClient(home, expectedDsh);
+  checkNoSecondMcpClient(home);
 
   // 3. Композиция профиля: строка плагина правил и строка сервера должны быть в дереве.
   console.log('[3/5] проверяю композицию профиля');

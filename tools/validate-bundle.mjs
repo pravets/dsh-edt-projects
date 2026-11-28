@@ -7,9 +7,14 @@
 //
 // Код возврата: 0 — замечаний нет, 1 — есть.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+
+// semver лежит в node_modules как транзитивная зависимость npm-клиента.
+const require = createRequire(import.meta.url);
+const semver = require('semver');
 
 import { DEFAULTS, isKnownPath } from '../packages/dsh-edt-projects/lib/schema.mjs';
 import { TOOL_NAMES } from '../packages/dsh-edt-projects/lib/index.js';
@@ -116,15 +121,17 @@ if (manifest) {
   }
 
   // --- совместимость с DSH ---------------------------------------------------
-  // DSH 0.2.2+ читает engines.dsh при установке и на каждом старте. mcp-client —
-  // общий с хостом экземпляр: в dependencies он дал бы вторую копию в профиле.
+  // DSH 0.2.2+ читает engines.dsh при установке и на каждом старте и проверяет
+  // его semver-диапазоном с includePrerelease (dsh-app-boot). Бандл поддерживает
+  // два контракта mcp-client: fiber-монтаж на rc.5 и McpClientHost на 0.2.3+,
+  // поэтому обе границы — диапазоны, а не точные пины.
   const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client';
+  const DSH_RANGE = /^>=\s*0\.2\.2-rc\.5\s*<\s*0\.3$/;
   const dshRange = manifest.engines?.dsh;
-  const exactSemver = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
   if (typeof dshRange !== 'string' || dshRange.trim() === '') {
     fail('package.json: нет engines.dsh — DSH не проверит совместимость бандла');
-  } else if (!exactSemver.test(dshRange)) {
-    fail(`package.json: engines.dsh «${dshRange}» — ожидалась точная SemVer-версия`);
+  } else if (!DSH_RANGE.test(dshRange)) {
+    fail(`package.json: engines.dsh «${dshRange}» — ожидался диапазон «${DSH_RANGE.source}»`);
   } else {
     const peer = manifest.peerDependencies?.[MCP_CLIENT];
     const dev = manifest.devDependencies?.[MCP_CLIENT];
@@ -132,10 +139,14 @@ if (manifest) {
       fail(`package.json: ${MCP_CLIENT} в dependencies — в профиле появится вторая копия; нужен peer+dev`);
     } else if (peer === undefined || dev === undefined) {
       fail(`package.json: ${MCP_CLIENT} должен быть в peerDependencies и devDependencies`);
-    } else if (peer !== dshRange || dev !== dshRange) {
-      fail(`версии расходятся: engines.dsh ${dshRange}, peer ${peer}, dev ${dev}`);
+    } else if (!DSH_RANGE.test(String(peer))) {
+      fail(`package.json: peer ${MCP_CLIENT} «${peer}» — ожидался тот же диапазон, что engines.dsh`);
+    } else if (!semver.valid(dev)) {
+      fail(`package.json: dev ${MCP_CLIENT} «${dev}» — ожидалась точная версия для локальных тестов`);
+    } else if (!semver.satisfies(dev, dshRange, { includePrerelease: true })) {
+      fail(`версии расходятся: engines.dsh ${dshRange}, dev ${dev}`);
     } else {
-      pass(`совместимость: DSH ${dshRange}, ${MCP_CLIENT} — peer+dev`);
+      pass(`совместимость: DSH ${dshRange}, ${MCP_CLIENT} — peer ${peer} + dev ${dev}`);
     }
   }
 
